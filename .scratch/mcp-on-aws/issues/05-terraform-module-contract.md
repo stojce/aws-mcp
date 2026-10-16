@@ -1,7 +1,7 @@
 # Ticket 05: Grilling Terraform module contract: inputs, outputs, assumptions
 
 Type: grilling
-Status: open
+Status: resolved
 Blocked by: 04
 
 ## Question
@@ -19,3 +19,14 @@ Recommend a façade; user confirms or edits. This ticket is the "interface as de
 ## Answer
 
 <!-- filled on resolution -->
+## Answer
+
+Module façade decisions (round 3 grilling, all recommended options accepted):
+
+- **Cognito ownership:** module creates **only the MCP app client and the MCP resource server/scopes** on the existing pool. Pool itself, web clients, etc. stay owned by `guryou-infra-terraform` (`modules/cognito`). Module inputs: pool id, region; NOT pool creation.
+- **Gateway targets:** module owns `aws_bedrockagentcore_gateway_target` resources, driven by a variable list `targets: [{ name, lambda_arn, tool_name, tool_schema, credential_provider_arn? }]` — `credential_provider_arn` optional hook for later HTTP/OpenAPI targets, empty at v1.
+- **Outbound credential providers:** **skipped at v1** (Lambda targets need none); the variable hook above is the seam for the later pivot.
+- **Outputs:** gateway endpoint URL, gateway id, gateway execution role ARN, MCP app client id, tool names.
+- **No `one_time` flag:** module always owns the gateway execution role and the `lambda:InvokeFunction` permission wiring for its targets.
+
+Consequences for the ADR's Terraform section: `variable "targets"` is the module's tool surface; resource server + app client + gateway + gateway targets + role are the five resource groups; zero manual post-apply steps required.
