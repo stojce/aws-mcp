@@ -1,7 +1,7 @@
 # Map: MCP server on AWS for existing API
 
 Type: wayfinder:map
-Status: open
+Status: closed (destination reached 2026-10-16; implementation ticketed as 09–15 via to-spec/to-tickets)
 
 ## Destination
 
@@ -27,8 +27,7 @@ An **ADR-style decision document** in this repo answering: is exposing the exist
 
 ## Not yet specified
 
-- **GraphQL endpoint exposure**: now decided by tickets 04+06: Lambda-target on the existing Apollo graphql.ts lambda; raw-GraphQL-over-HTTP-target and OpenAPI-target routes are the documented fallback pivot, not v1. No remaining fog on this thread.
-- **ADR structure and location**: graduated to [Ticket 08: Write the ADR](issues/08-write-the-adr.md). No fog remains: the frontier is that single ticket, and resolving it = the destination's end.
+(none — all fog resolved; implementation tickets 09–15 live in `issues/`)
 
 ## Out of scope
 

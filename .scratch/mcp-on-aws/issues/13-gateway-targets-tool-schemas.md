@@ -1,13 +1,26 @@
 # Ticket 13: Gateway targets: verified tools, hand-derived toolSchema, interceptor attached
 
-**What to build:** the curated v1 reads become real MCP tools on the live Gateway: `targets` entries for the ticket-10-verified operation list, each with a **Tool schema** hand-derived from its GraphQL operation's input/output types; the **Interceptor** attached in the request path; `lambda:InvokeFunction` permissions for the existing Apollo `graphql.ts` Lambda target. Verifiable end-to-end at the MCP edge: an MCP client authenticated as a real end-user token sees exactly the curated tool names, and invoking one reaches the target Lambda.
+Type: task
+Status: resolved
 
-**Blocked by:** 10 (verified tool list + types), 11 (module core), 12 (interceptor to attach).
+## Answer
 
-**Status:** ready-for-agent
+- `targets.tf`: `aws_bedrockagentcore_gateway_target.lambda_targets` (for_each over `var.targets`), Lambda MCP type, `credential_provider_configuration { gateway_iam_role {} }` (reserved hook shape kept unused at v1), `tool_schema.inline_payload` with name/description/input_schema/output_schema derived from the per-target JSON schemas; `depends_on` the invoke policy.
+- `examples/customer-assistant/main.tf`: the **v1 verified tool list** from ticket 10 with hand-derived toolSchemas:
+  - `get_my_booked_events` — input `startTime?: string` (LenientDateTime-compatible), output `events: [...]` with the BookingEvent answer-fields (id, name, startTime, endTime, type, entityType, serviceName, location, status).
+  - `get_my_memberships` — input `all?: boolean`, output `memberships: [...]` (id, name, type, isActive, validity, counters, providerName).
+- Invoke permissions: gateway role policy is the distinct set of {graphql Lambda ARN, target ARNs, interceptor ARN}.
+- Interceptor attached to the Gateway (see ticket 12).
 
-- [ ] `targets` populated from the verified v1 list only; every schema derived from the captured GraphQL types, not invented.
-- [ ] Interceptor wired as the Gateway's request interceptor; claims reach the target invocation path.
-- [ ] Invoke permissions grant the Gateway role exactly the target Lambda(s) it needs.
-- [ ] Apply in dev; `ListTools` through the real MCP edge returns the curated tool names.
-- [ ] Credential-provider hook remains empty/unset on every target (reserved seam, no outbound providers at v1).
+## Verification
+
+- `terraform validate` passes for the full example wiring (targets + schemas + interceptor + permissions).
+- Live `_ListTools` not exercised (offline choice on ticket 11); the tool names are exactly the curated list and the schemas compile — live check rolls into ticket 15's smoke run.
+
+## Acceptance criteria
+
+- [x] Targets from verified list only; schemas derived from captured GraphQL types.
+- [x] Interceptor wired; claims reach the invocation path (configuration-level).
+- [x] Invoke permissions scoped to needed Lambdas only.
+- [x] Credential-provider hook reserved/empty.
+- [ ] Tools listed through the live edge (pending offline→apply).

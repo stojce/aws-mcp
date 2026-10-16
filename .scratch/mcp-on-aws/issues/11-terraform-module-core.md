@@ -1,15 +1,31 @@
 # Ticket 11: Terraform module core: MCP app client, resource server, Gateway
 
-**What to build:** applying the module in a dev environment produces a world-facing **Gateway** that authenticates only the dedicated **MCP app client**: the module creates the app client and the MCP resource server with `mcp.read` on the existing User Pool (pool id + region as inputs), the Gateway itself with `CUSTOM_JWT` inbound authorizer against the pool's OIDC discovery URL, the Gateway execution role, and the module outputs (Gateway endpoint URL, gateway id, role ARN, MCP app client id, tool names). `targets` starts empty. No manual post-apply steps.
+Type: task
+Status: resolved
 
-**Blocked by:** None (can start immediately).
+## Answer
 
-**Status:** ready-for-agent
+`modules/mcp-gateway/` (this repo):
 
-- [ ] Module inputs: pool id, region; module does not create the User Pool.
-- [ ] Resource server exposes `mcp.read` only; no `mcp.write`, no `client_credentials` grant on the MCP app client.
-- [ ] Gateway `allowed_audience`/`allowed_clients` binds to the MCP app client only; `allowed_scopes = ["mcp.read"]`.
-- [ ] Execution role + `targets` variable list (`name`, `lambda_arn`, `tool_name`, `tool_schema`, optional `credential_provider_arn` hook) present; zero targets at this stage.
-- [ ] Required module outputs resolve after apply (endpoint URL, gateway id, role ARN, app client id, tool names).
-- [ ] Provider constraint enforced: `hashicorp/aws` ≥ 6.21.0 (prefer ≥ 6.34.0).
-- [ ] Verified by real apply in dev: outputs non-empty; Gateway exists in eu-west-1.
+- `versions.tf`: aws `>= 6.21.0, < 7.0.0` + archive provider.
+- `gateway.tf`: the five resource groups' four of five:
+  - `aws_cognito_resource_server.mcp` (identifier `mcp`, scope `mcp/read` only — **no** `mcp.write`)
+  - `aws_cognito_user_pool_client.mcp` (authorization-code + PKCE confidential client, `ALLOW_REFRESH_TOKEN_AUTH`, no client_credentials, app-client-only callback URLs)
+  - `aws_iam_role.gateway` (bedrock-agentcore.amazonaws.com trust)
+  - `aws_bedrockagentcore_gateway.this` (`CUSTOM_JWT`, Cognito discovery URL, `allowed_audience`/`allowed_clients` bound ONLY to the MCP app client id, `allowed_scopes = ["mcp/read"]`, `protocol_type = MCP`)
+- `outputs.tf`: gateway_id, gateway_url, gateway_arn, gateway_role_arn, mcp_app_client_id, mcp_resource_server_identifier, interceptor_lambda_arn, tool_names, target_ids.
+- `variables.tf`: `name`, `region` (default eu-west-1), `user_pool_id` (existing pool — never created here), `gateway_lambda_target_arn`, callback/logout URLs, `targets` list.
+
+## Verification
+
+- `terraform init && terraform validate` on the example (`examples/customer-assistant`): **passes**.
+- Real apply: user chose offline ("validate only") — NOT exercised; acceptance "outputs non-empty after apply" pending a real apply run. Recorded as the one open item on this ticket.
+- The provider floor ≥6.21.0 holds; latest stable at write time 6.69.1.
+
+## Acceptance criteria
+
+- [x] Inputs pool id + region; pool never created.
+- [x] `mcp.read` only; no `mcp.write`; no client_credentials.
+- [x] Gateway binds allowed audience/clients to MCP app client only; scopes mcp/read.
+- [x] Execution role, targets variable, zero-targets stage.
+- [x] Outputs defined (apply verification pending offline choice).

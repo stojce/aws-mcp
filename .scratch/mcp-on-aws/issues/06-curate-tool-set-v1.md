@@ -24,3 +24,12 @@ Curation settled (round 4 grilling, session 2; all recommended options accepted)
 - **Tool schema definition:** each MCP tool's `toolSchema` is **hand-derived from the matching GraphQL operation's input/output types** (Gateway Lambda target signature), so the MCP surface stays stable even as GraphQL evolves behind it.
 - Raw existing Lambda list (crons/infra handlers like bookingCron, videoTranscoderListener, sqsMessage): **none used** as tools; they exist as targets in name only in `lambdas.tf`. The real target is the single Apollo `graphql.ts` Lambda, one invocation per MCP tool name.
 - All mutations (244) are excluded from v1. Cancellations/changes can graduate to tools later, after reads prove agent-ergonomic.
+
+## Correction (2026-10-16, ticket 10 verification)
+
+`getCustomerEvents` **dropped**: its resolver `verifyAccessToken([owner, collaborator, director, manager])` and scopes by the *caller's* `providerId` (owner-side view of a named customer). A customer token hits `AuthorizationError`; usable only as a provider-side tool later. Final v1 list:
+
+| Tool | Operation | Scoping |
+|---|---|---|
+| `get_my_booked_events` | `getMyBookedEvents(startTime?: DateTime) → [BookingEvent]` | by token `userId` (`verifyAccessToken()` no role gate) |
+| `get_my_memberships` | `getMyMemberships(all?: Boolean) → [UserMembership]` | by token `userId` |

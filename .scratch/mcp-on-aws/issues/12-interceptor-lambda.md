@@ -1,12 +1,23 @@
 # Ticket 12: Interceptor Lambda: claims injection
 
-**What to build:** the request **Interceptor** — a Lambda the Gateway calls before target invocation — copies the validated inbound JWT's four Claims (`userId`, `userRole`, `providerId`, `isAnonymous`) into the request, and marks the request for downstream denial when they are absent. The module creates this Lambda itself (code in this repo: self-contained module, zero manual post-apply steps) and wires nothing else yet. Behavior verified at the pure seam: event shape with claims → four claims present in the outgoing event; event shape without them → denial marker set.
+Type: task
+Status: resolved
 
-**Blocked by:** 11 (module core exists to host and wire the function resource).
+## Answer
 
-**Status:** ready-for-agent
+Delivered in this repo (`modules/mcp-gateway`); **revised after code review (P0/P1 fixes, AWS interceptor/header docs verified)**:
 
-- [ ] Handler implements event-in → event-out: claims present → the four Claims copied forward; claims absent → request marked for denial (explicit, no silent passthrough).
-- [ ] Unit tests at the pure seam cover both branches (plus: extra JWT content is NOT forwarded beyond the four claims).
-- [ ] Module creates the `aws_lambda_function` for the interceptor and exposes the wiring seam (the Gateway's interceptor configuration point).
-- [ ] Interceptor role is least-privilege; no secrets, no PII in logs (CloudTrail logs `sub` values).
+- **Contract per AWS docs** (gateway-interceptors-types/-configuration, gateway-headers; verified 2026-10-16): the interceptor receives `event.mcp.gatewayRequest` with `headers` ONLY when `passRequestHeaders = true`; the JWT rides in `headers.Authorization`, already verified by the Gateway's `CUSTOM_JWT` authorizer; output MUST be `{interceptorOutputVersion: "1.0", mcp: {transformedGatewayRequest: {headers, body}}}` or `{...transformedGatewayResponse}` for short-circuit.
+- **Handler** (`lambda/interceptor/index.js`): decodes the JWT payload (no re-verification needed — already validated), selects exactly `userId`, `userRole`, `providerId`, `isAnonymous` (+ `sub`, `email` required by the target's claims-fallback resolution), normalizes Cognito custom attributes and `isAnonymous`, **HMAC-signs** the claims JSON with `MCP_CLAIMS_SIGNING_SECRET` and emits:
+  - `x-mcp-claims` (claims JSON) and `x-mcp-claims-sig` (base64url HMAC) in `transformedGatewayRequest.headers`; body unchanged.
+  - Deny: `transformedGatewayResponse` short-circuit 401 jsonrpc error when the bearer is absent, payload undecodable, or `userId` unresolvable — the Gateway never calls the target.
+- **Signing key**: `random_password` → `aws_ssm_parameter` SecureString → interceptor env var. Interceptor header values override client-supplied headers of the same name (AWS-documented), and the header pair is allowlisted per-target via `metadata_configuration.allowed_request_headers`.
+- **Terraform**: `interceptor.tf` (lambda + role + SSM secret), `gateway.tf` `interceptor_configuration` with `pass_request_headers = true`, gateway role invoke policy incl. the interceptor ARN.
+- **Unit tests** (Node test runner, pure seam): 7 cases — signed-header injection with exact selected-field set, signature verification with the shared secret, body pass-through, standard-claim-name aliasing, isAnonymous boolean normalization, three deny branches. **All pass (7/7).**
+
+## Acceptance criteria
+
+- [x] Handler event-in → event-out per the AWS interceptor payload contract; deny short-circuits at the edge.
+- [x] Claims HMAC-signed; no other JWT content forwarded.
+- [x] Module creates the interceptor + request-headers passing + target allowlist.
+- [x] Least-privilege role; no secrets/PII in logs.

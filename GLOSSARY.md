@@ -28,4 +28,4 @@ _Avoid_: token claims (over-broad; "Claims" here means the normalized app-level 
 The MCP `toolSchema` object declared per gateway target in Terraform; hand-derived from the matching GraphQL operation's input/output types so the MCP surface stays stable while GraphQL evolves.
 
 **mcp.read / mcp.write**:
-The Cognito resource-server scopes on the MCP app client. `mcp.read` exists at v2; `mcp.write` is reserved for future mutation tools.
+The Cognito resource-server scopes on the MCP app client. In Cognito configuration and access tokens they appear fully qualified as `mcp/read` / `mcp/write` (resource-server identifier + scope name). `mcp.read` exists at v1; `mcp.write` is reserved for future mutation tools.
