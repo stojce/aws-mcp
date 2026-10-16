@@ -26,8 +26,8 @@ An **ADR-style decision document** in this repo answering: is exposing the exist
 
 ## Not yet specified
 
-- **GraphQL endpoint exposure — sharpened by #01:** API-GW-stage targets can't speak Cognito OAuth; the real choice is now (a) OpenAPI/MCP target + CognitoOauth2 outbound (CLIENT_CREDENTIALS or TOKEN_EXCHANGE per-user), vs (b) thin tool-shaped Lambda adapter targets (interceptor pattern for user identity). Still foggy: which fits ticket 06's curated tool set better; becomes a grilling ticket once 04 lands.
-- **ADR structure and location** (`docs/adr/NNNN-agentcore-gateway-mcp.md`): outline becomes specifiable once the verdict (#04) is in.
+- **GraphQL endpoint exposure** — now decided by tickets 04+06: Lambda-target on the existing Apollo graphql.ts lambda; raw-GraphQL-over-HTTP-target and OpenAPI-target routes are the documented fallback pivot, not v1. No remaining fog on this thread.
+- **ADR structure and location** (`docs/adr/NNNN-agentcore-gateway-mcp.md`): the successor ticket — write the ADR from tickets 01–07 conclusions. Way is clear: no fog remains beyond it.
 
 ## Out of scope
 
