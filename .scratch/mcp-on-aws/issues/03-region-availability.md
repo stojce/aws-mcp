@@ -1,7 +1,7 @@
 # Ticket 03: Region availability of AgentCore Gateway vs current stack region
 
 Type: research
-Status: open
+Status: resolved
 
 ## Question
 
@@ -9,4 +9,4 @@ In which AWS regions is Bedrock AgentCore Gateway (and its per-target/outbound c
 
 ## Answer
 
-<!-- filled on resolution -->
+(See agent transcript for the raw scan; the reusable fact follows.) AgentCore **Gateway and its credential-provider/tunneling machinery are region-scoped but broadly available across the major AgentCore regions** (us-east-1, us-west-2, eu-central-1, eu-west-1, ap-northeast-1/2 among others) per the AgentCore devguide endpoints page. **User still needs to supply the existing stack's region** — the deployment-region check is a 1-line lookup against that list.

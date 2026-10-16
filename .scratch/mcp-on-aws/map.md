@@ -16,12 +16,13 @@ An **ADR-style decision document** in this repo answering: is exposing the exist
 
 ## Decisions so far
 
-<!-- one line per resolved ticket: enough to judge relevance, then zoom the link for detail -->
+- [Ticket 01 — AgentCore Gateway auth: Cognito inbound per-user, Lambda target outbound](issues/01-agentcore-gateway-auth-research.md): Cognito reuse works inbound (CUSTOM_JWT, grant-agnostic); **no automatic per-user identity propagation to Lambda targets** — interceptor-injected claims (or HTTP-target passthrough/OBO) is the documented pattern; API-GW-stage targets can't speak Cognito OAuth (use OpenAPI/MCP target + CognitoOauth2 provider).
+- [Ticket 02 — Terraform provider support](issues/02-terraform-provider-support.md): full `aws_bedrockagentcore_*` coverage in `hashicorp/aws` — no fallbacks; gateway/targets from v6.17.0, **min v6.21.0**, prefer >= 6.34.0.
+- [Ticket 03 — Region availability](issues/03-region-availability.md): AgentCore Gateway broadly available in major AgentCore regions; **user must still confirm existing stack's region** for the 1-line check.
 
 ## Not yet specified
 
-- **GraphQL endpoint exposure**: wrap the GraphQL endpoint directly via Gateway's outbound HTTP credential provider, or add thin tool-shaped Lambda adapters over it? The trade-off (whole-GraphQL-surface vs curated tool set, and whether the Gateway can hit API GW with Cognito inbound authorizer) becomes specifiable once #01's auth research lands.
-- **Identity propagation / authorization fidelity**: whether per-user identity context flows from Gateway → Lambda target (the per-user isolation question), and if not, what compensating pattern is needed — becomes a ticket once #01 answers it as a fact.
+- **GraphQL endpoint exposure — sharpened by #01:** API-GW-stage targets can't speak Cognito OAuth; the real choice is now (a) OpenAPI/MCP target + CognitoOauth2 outbound (CLIENT_CREDENTIALS or TOKEN_EXCHANGE per-user), vs (b) thin tool-shaped Lambda adapter targets (interceptor pattern for user identity). Still foggy: which fits ticket 06's curated tool set better; becomes a grilling ticket once 04 lands.
 - **ADR structure and location** (`docs/adr/NNNN-agentcore-gateway-mcp.md`): outline becomes specifiable once the verdict (#04) is in.
 
 ## Out of scope
