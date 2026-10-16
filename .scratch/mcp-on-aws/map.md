@@ -27,7 +27,7 @@ An **ADR-style decision document** in this repo answering: is exposing the exist
 ## Not yet specified
 
 - **GraphQL endpoint exposure** — now decided by tickets 04+06: Lambda-target on the existing Apollo graphql.ts lambda; raw-GraphQL-over-HTTP-target and OpenAPI-target routes are the documented fallback pivot, not v1. No remaining fog on this thread.
-- **ADR structure and location** (`docs/adr/NNNN-agentcore-gateway-mcp.md`): the successor ticket — write the ADR from tickets 01–07 conclusions. Way is clear: no fog remains beyond it.
+- **ADR structure and location**: graduated to [Ticket 08 — Write the ADR](issues/08-write-the-adr.md). No fog remains: the frontier is that single ticket, and resolving it = the destination's end.
 
 ## Out of scope
 
