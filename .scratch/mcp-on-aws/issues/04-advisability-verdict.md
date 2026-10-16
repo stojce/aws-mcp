@@ -1,7 +1,7 @@
 # Ticket 04: Advisability verdict: AgentCore Gateway for world-facing MCP over an existing per-user API
 
 Type: grilling
-Status: open
+Status: claimed
 Blocked by: 01, 02, 03
 
 ## Question
