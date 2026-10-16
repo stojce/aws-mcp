@@ -1,7 +1,7 @@
 # Ticket 06: Grilling curation: which 2–5 operations become MCP tools at v1
 
 Type: grilling
-Status: claimed
+Status: resolved
 Blocked by: 04
 
 ## Question
@@ -11,3 +11,16 @@ Blocked by: 04
 ## Answer
 
 <!-- filled on resolution -->
+## Answer
+
+Curation settled (round 4 grilling, session 2; all recommended options accepted):
+
+- **First consumer: end-user (customer-facing) assistant.** Tools answer "my ..." questions; per-user claims in `appContext` (userId/userRole/providerId/isAnonymous from `libs/auth-cognito` normalizeClaims) already scope reads correctly.
+- **v1 tool family: booking/subscription reads for the logged-in user**, hand-picked from the existing GraphQL surface's **already per-user-scoped** operations. Existing surface = 165 Queries + 244 Mutations across 65 datasources; curation was real (not everything is agent-appropriate).
+- **v1 candidate list (from proxy graphql generated schema):**
+  - `getMyBookedEvents(startTime)` → typed `[BookingEvent]`
+  - `getCustomerEvents(identifier, startTime, endTime, customerId, isDeal)` → `User` (per-user subscription + reservation view from owner's provider)
+  - plus 1–3 of the closest subscription/reservation read ops from `ReservationsAPI`/`SubscriptionsAPI` datasources, finalized at module-consumption time.
+- **Tool schema definition:** each MCP tool's `toolSchema` is **hand-derived from the matching GraphQL operation's input/output types** (Gateway Lambda target signature), so the MCP surface stays stable even as GraphQL evolves behind it.
+- Raw existing Lambda list (crons/infra handlers like bookingCron, videoTranscoderListener, sqsMessage) — **none used** as tools; they exist as targets in name only in `lambdas.tf`. The real target is the single Apollo `graphql.ts` Lambda, one invocation per MCP tool name.
+- All mutations (244) are excluded from v1. Cancellations/changes can graduate to tools later, after reads prove agent-ergonomic.
