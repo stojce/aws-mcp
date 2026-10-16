@@ -9,7 +9,7 @@ An **ADR-style decision document** in this repo answering: is exposing the exist
 
 ## Notes
 
-- Domain: AWS security/infra; existing stack = API Gateway (Cognito authorizer) → Lambda, plus an existing GraphQL endpoint. No code in this repo yet.
+- Domain: AWS security/infra; existing stack = **guryou-mono** (`~/Projects/gy/guryou-mono`, `stage2` branch/worktree), region **eu-west-1**; infra in **guryou-infra-terraform** (`~/Projects/gy/guryou-infra-terraform`). Existing APIs: `proxy` (GraphQL, Apollo Server in `api/proxy/src/lambdas/graphql.ts`) and `training`. Auth is **custom Lambda-authorizer pattern** (code in `libs/auth-cognito`, `REQUEST`-type authorizer in `modules/api/api_gw.tf`, currently `authorization_type = "NONE"` at API GW edge, auth enforced inside the Lambda via `decodeCognitoJwtToken` + legacy fallback). Cognito pool managed in `modules/cognito/`. Lambda list and Apollo `graphql.ts` confirmed; the `graphql.ts` context fn already reads `event.headers.authorization`.
 - **Executed answers already locked in round 1:** AgentCore Gateway (vs self-built) is _chosen_; destination is a decision doc, not shipped code; consumers are **end users of your app with per-user data isolation**; tools are **wrap existing Lambdas as-is**; scope is **2–5 curated high-value operations**; module lives in **this repo**.
 - Tracker: **local-markdown** under `.scratch/mcp-on-aws/` (map + `issues/NN-<slug>.md`).
 - Skills to consult per session: `grilling`, `domain-modeling`, `research` (for AWS/Terraform fact-finding); `amazon-bedrock` and `aws-auth` and `aws-serverless` are relevant when the topic surfaces.
