@@ -1,7 +1,7 @@
 # Ticket 06: Grilling curation: which 2–5 operations become MCP tools at v1
 
 Type: grilling
-Status: open
+Status: claimed
 Blocked by: 04
 
 ## Question
