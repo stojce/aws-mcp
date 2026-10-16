@@ -18,7 +18,7 @@ _Avoid_: wrapper Lambda (no wrapper is added before the target)
 
 **Interceptor**:
 A request interceptor Lambda the Gateway calls before a target invocation; it copies selected claims from the validated inbound JWT into the request. The per-user identity channel for Lambda targets.
-_Avoid_: Lambda authorizer (that's the existing API GW pattern, currently bypassed — different mechanism)
+_Avoid_: Lambda authorizer (that's the existing API GW pattern, currently bypassed, a different mechanism)
 
 **Claims**:
 The per-user authorization facts (`userId`, `userRole`, `providerId`, `isAnonymous`) resolved by `libs/auth-cognito`'s `normalizeClaims`. The Gateway itself never derives these; they arrive via the interceptor.
@@ -28,4 +28,4 @@ _Avoid_: token claims (over-broad; "Claims" here means the normalized app-level 
 The MCP `toolSchema` object declared per gateway target in Terraform; hand-derived from the matching GraphQL operation's input/output types so the MCP surface stays stable while GraphQL evolves.
 
 **mcp.read / mcp.write**:
-The Cognito resource-server scopes on the MCP app client. `mcp.read` exists at v1; `mcp.write` is reserved for future mutation tools.
+The Cognito resource-server scopes on the MCP app client. `mcp.read` exists at v2; `mcp.write` is reserved for future mutation tools.
