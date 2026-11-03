@@ -55,6 +55,31 @@ module "mcp" {
 
 The tool backend must scope every read by `event.identity.sub`.
 
+## Lambda packages
+
+Each instance writes its generated ZIP under
+`${path.root}/.terraform/mcp-http-api/<name>-<source-hash>.zip`. The hash covers
+`tools.json`, `index.mjs`, and `runtime.mjs`, so different instances and changed
+manifests or code keep separate artifacts. The module source directory is only
+read during packaging.
+
+Keep the generated ZIPs until their saved plans have been applied. When planning
+and applying in separate workspaces, transfer the referenced ZIPs with the plan
+and preserve their relative paths.
+
+The packaging regression test requires Terraform 1.9+, Node.js 22+, and `unzip`.
+It reuses providers installed in this module (or `MCP_TERRAFORM_PLUGIN_DIR`),
+otherwise installs them normally. Run it from the repository root:
+
+```bash
+node --test modules/mcp-http-api/tests/package-isolation.test.mjs
+```
+
+The test targets only the real archive data sources in two module instances
+sharing one copied source directory. It checks ZIP contents and hashes,
+an intervening manifest change, saved-plan apply, and changes to both JavaScript
+files. It requires no AWS credentials and deploys no AWS resources.
+
 ## Limits
 
 - Stateless: no server-initiated messages, no SSE stream (`GET /mcp` returns 405).

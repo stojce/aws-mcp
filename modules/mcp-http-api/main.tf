@@ -51,23 +51,26 @@ resource "aws_cognito_user_pool_client" "mcp" {
 # 2. MCP Lambda: code + generated tools manifest packaged together
 # ──────────────────────────────────────────────────────────────────────────────
 
+locals {
+  mcp_server_sources = {
+    "tools.json"  = local.tools_manifest
+    "index.mjs"   = file("${path.module}/lambda/mcp-server/index.mjs")
+    "runtime.mjs" = file("${path.module}/lambda/mcp-server/runtime.mjs")
+  }
+}
+
 data "archive_file" "mcp_server" {
-  type        = "zip"
-  output_path = "${path.module}/.build/mcp-server.zip"
+  type = "zip"
+  # Local module instances share path.module. Keep builds in the root's ignored
+  # directory, and retain earlier packages for saved plans when inputs change.
+  output_path = "${path.root}/.terraform/mcp-http-api/${var.name}-${sha256(jsonencode(local.mcp_server_sources))}.zip"
 
-  source {
-    content  = local.tools_manifest
-    filename = "tools.json"
-  }
-
-  source {
-    content  = file("${path.module}/lambda/mcp-server/index.mjs")
-    filename = "index.mjs"
-  }
-
-  source {
-    content  = file("${path.module}/lambda/mcp-server/runtime.mjs")
-    filename = "runtime.mjs"
+  dynamic "source" {
+    for_each = local.mcp_server_sources
+    content {
+      content  = source.value
+      filename = source.key
+    }
   }
 }
 

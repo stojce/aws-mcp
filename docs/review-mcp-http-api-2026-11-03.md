@@ -2,16 +2,16 @@
 
 Scope: all current code in `modules/mcp-http-api/`, including Terraform, the Lambda runtime, and tests. `examples/mcp-http-api/` was used as supporting context. This is a working-tree review, not a diff review; the module and example were untracked at review time.
 
-The review identified **0 Standards findings and 13 Spec findings, all P2**. No P1 findings were identified in this snapshot. Finding numbers such as R01 are identifiers, not priority ratings. The greatest deployment risk is the shared Lambda ZIP path across module instances.
+The review identified **0 Standards findings and 13 Spec findings, all P2**. No P1 findings were identified in this snapshot. Finding numbers such as R01 are identifiers, not priority ratings. The highest repair priority was the shared Lambda ZIP path across module instances. **R02 is now fixed; the other 12 findings remain open.**
 
-No implementation files were changed during the review. All findings below remain open at the time this report was saved.
+No implementation files were changed during the original review. This report was updated after the R02 repair on 2026-11-03; see its status and verification below.
 
 ## Findings index
 
 | ID | Priority | Issue | Status |
 |---|---|---|---|
 | R01 | P2 | Advertised AWS provider v5 support is incompatible | Open |
-| R02 | P2 | Module instances share the generated Lambda ZIP | Open |
+| R02 | P2 | Module instances share the generated Lambda ZIP | Fixed |
 | R03 | P2 | Resource-server identifiers collide in a shared pool | Open |
 | R04 | P2 | Tool arguments are not validated against the full schema | Open |
 | R05 | P2 | Protocol headers and negotiated versions are inconsistent | Open |
@@ -28,7 +28,7 @@ No implementation files were changed during the review. All findings below remai
 
 The user clarified that "P1" means the highest-priority findings to repair first. Start with **R02, the shared Lambda ZIP path**, because it can deploy the wrong tool manifest to an endpoint. The original review's severity ratings remain P2; R01 is a finding number, not the requested priority.
 
-R02's repair must give separate module instances their own generated packages and verify the actual ZIP contents for two different tool manifests. Preserve verified identity and unrelated working-tree edits. Update this report's status and verification results once the repair is complete.
+R02's repair gives separate module instances their own generated packages and verifies the actual ZIP contents for two different tool manifests. Verified identity and unrelated working-tree edits are preserved. Its status and verification results are recorded below.
 
 ## Standards
 
@@ -54,11 +54,15 @@ Sources: [v5.80.0 region schema](https://github.com/hashicorp/terraform-provider
 
 Location: `modules/mcp-http-api/main.tf:54`–`56`.
 
-Every local module instance writes its generated code and tool manifest to `${path.module}/.build/mcp-server.zip`. Local instances share the same source directory. Terraform explicitly warns that multiple local invocations can overwrite data written under `path.module`.
+At review time, every local module instance wrote its generated code and tool manifest to `${path.module}/.build/mcp-server.zip`. Local instances share the same source directory. Terraform explicitly warns that multiple local invocations can overwrite data written under `path.module`.
 
 **Trigger and impact:** instantiate the module twice with different names, pools, and tool manifests. Both Lambda resources reference the same ZIP path, so an archive generated for one instance can be uploaded to the other endpoint. Separating the pools avoids R03 but does not prevent this collision.
 
 **Fix:** give each instance its own artifact path, preferably outside the module source directory. Verify that two distinct manifests produce separate archives with the expected contents, including when planning and applying a saved plan.
+
+**Status: Fixed (2026-11-03).** ZIPs now use `${path.root}/.terraform/mcp-http-api/<name>-<source-hash>.zip`. The hash covers the exact `tools.json`, `index.mjs`, and `runtime.mjs` contents used by the archive provider. Instance names separate otherwise identical packages; changed manifests or code produce new paths, preserving packages referenced by earlier saved plans. Lambda `filename` and `source_code_hash` still come from the same archive data source. The generated directory is covered by the existing `.terraform/` ignore rule.
+
+**Regression verification:** `node --test modules/mcp-http-api/tests/package-isolation.test.mjs` first failed on the original configuration because both instances recorded `mcp-http-api/.build/mcp-server.zip`. After the fix, it passed with two instances sharing one copied source directory and using distinct names, pools, and manifests. The test inspects actual ZIP entries, both manifests, both JavaScript files, and the SHA-256 hashes recorded in the plan. It generates an intervening plan with changed manifests, checks that the original ZIPs remain intact, applies the original saved plan, and verifies the original archive references and bytes again. Changes to each JavaScript file also produce new package paths. The fixture targets only real archive data sources and asserts that saved plans contain no AWS resource changes; it performs no AWS deployment. Generated ZIPs must accompany saved plans when moving between workspaces, as documented in the module README.
 
 Source: [Terraform references and filesystem paths](https://developer.hashicorp.com/terraform/language/expressions/references#filesystem-and-workspace-info).
 
@@ -194,6 +198,21 @@ The mock provider supplies no valid defaults for IAM-role or CloudWatch log-grou
 
 ## Verification and limits
 
+### R02 repair verification
+
+| Check | Result |
+|---|---|
+| Real archive isolation, ZIP contents/hashes, and saved-plan apply | 1/1 passed; original configuration failed the distinct-path assertion |
+| Combined repository Node unit suites | 34/34 passed |
+| Module and supporting example Terraform formatting | Passed |
+| Module Terraform validation | Passed with AWS provider 6.69.1 |
+| Supporting example Terraform validation | Passed with AWS provider 6.69.1 |
+| Repository-wide Terraform formatting | Flags unrelated `examples/customer-assistant/variables.tf` and `modules/mcp-gateway/variables.tf`; left unchanged |
+
+The packaging test uses the real archive provider 2.8.1 and Terraform 1.17.1 with Node 26.13.0. Saved-plan apply is verified locally against archive data sources, without deploying AWS resources. Discovery tests and live OAuth interoperability were not rerun for R02; their original limitations below remain applicable.
+
+### Original review verification
+
 | Check | Result |
 |---|---|
 | Combined repository Node unit suites | 34/34 passed |
@@ -215,8 +234,8 @@ terraform -chdir=modules/mcp-http-api test -no-color
 
 Available tools were Node 26.13.0 and Terraform 1.17.1; archive provider 2.8.1 was installed. Node 22 was not independently tested. No AWS deployment, state refresh, live token minting, or full OAuth login was performed.
 
-Provider-v5 incompatibility and module ZIP collisions were established from configuration and official source/documentation; a v5 binary and a two-instance AWS deployment were not used. Origin acceptance does not establish an authentication bypass.
+During the original review, provider-v5 incompatibility and module ZIP collisions were established from configuration and official source/documentation; a v5 binary and a two-instance AWS deployment were not used. R02 now also has real ZIP regression verification as described above. Origin acceptance does not establish an authentication bypass.
 
 Cognito discovery and the complete public authorization-code/PKCE flow still require live interoperability verification. The current public metadata routes, CloudFront authentication challenge, and resource-audience checks address the older review's absent-discovery and audience-configuration findings in code; this does not prove a positive end-to-end login. The saved-plan ignore rule is also present in the current working tree. Do not treat the older report's P1 findings as unchanged current findings without checking the implementation.
 
-Standards: **0 findings**. Spec: **13 P2 findings**; greatest deployment risk: **R02, shared ZIP artifacts**.
+Standards: **0 findings**. Spec: **13 P2 findings identified; R02 fixed, 12 still open**.
