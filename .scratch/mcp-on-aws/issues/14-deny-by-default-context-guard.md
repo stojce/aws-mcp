@@ -26,3 +26,17 @@ Implemented in the mono worktree (`~/Projects/gy/guryou-mono/stage2`, two commit
 - [x] Existing HTTP-API auth path unchanged (regression-covered).
 - [x] Unit tests in mono's auth test style for both sides of the seam.
 - [x] Consistent with ADR-0001 (guard = identity plumbing, HMAC-verified).
+
+## Round 2 resolution (2026-10-16)
+
+Review round 2 findings applied in the mono worktree (`~/Projects/gy/guryou-mono/stage2`, staged, uncommitted):
+
+- Fail-closed when `MCP_CLAIMS_SIGNING_SECRET` is unset (previously HMAC over `''` verified forged claims; reproduced, now denied).
+- Strict per-field claims validation (userId positive integer, isAnonymous boolean or `'true'`/`'false'`, typed optional fields); ill-typed claims denied even when signed.
+- Gateway route runs `resolveMissingClaims` (claims-fallback parity with the bearer route).
+- `as any` removed from the new code; `.d.ts` matches the implementation; shared `finishContext`.
+- Kiro spec added at `.kiro/specs/agentcore-gateway-identity-guard/`.
+
+Verification: lib vitest 16/16, proxy jest 5/5, `tsc --noEmit` clean, eslint clean on changed files, built package denies the empty-key forgery.
+
+Open prerequisite: the graphql Lambda must receive `MCP_CLAIMS_SIGNING_SECRET` from the SSM parameter (module output `mcp_claims_signing_secret_ssm_name`); see the runbook section "Target Lambda secret wiring". Without it the target denies all gateway calls.

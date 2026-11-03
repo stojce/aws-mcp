@@ -35,9 +35,10 @@ test('injects signed x-mcp-claims header + unchanged body on success', async () 
   const transformed = out.mcp.transformedGatewayRequest;
 
   const claims = JSON.parse(transformed.headers['x-mcp-claims']);
-  assert.strictEqual(claims.userId, '421');
+  // target's gatewayClaims validator requires integers, not strings
+  assert.strictEqual(claims.userId, 421);
   assert.strictEqual(claims.userRole, 'customer');
-  assert.strictEqual(claims.providerId, '17');
+  assert.strictEqual(claims.providerId, 17);
   assert.strictEqual(claims.isAnonymous, false);
   assert.strictEqual(claims.sub, 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
   // exact selected-field set: userId, userRole, providerId, isAnonymous, sub, email
@@ -77,10 +78,26 @@ test('denies when token payload lacks sub', async () => {
   assert.strictEqual(out.mcp.transformedGatewayResponse.body.error.message.includes('sub absent'), true);
 });
 
-test('denies when userId not resolvable', async () => {
+// token without custom attrs: interceptor forwards sub/email; the TARGET
+// resolves userId via resolveMissingClaims (ticket 12/14 contract)
+test('no-userId token forwards sub+email instead of denying (target resolves fallback)', async () => {
   const out = await handler(makeEvent({ sub: 's2', email: 'x@y.z' }));
-  assert.strictEqual(out.mcp.transformedGatewayResponse.statusCode, 401);
-  assert.strictEqual(out.mcp.transformedGatewayResponse.body.error.message.includes('userId not resolvable'), true);
+  const transformed = out.mcp.transformedGatewayRequest;
+  const claims = JSON.parse(transformed.headers['x-mcp-claims']);
+  assert.strictEqual(claims.sub, 's2');
+  assert.strictEqual(claims.email, 'x@y.z');
+  assert.strictEqual(claims.userId, undefined);
+  assert.strictEqual(claims.isAnonymous, false);
+  // still signed — the target verifies the HMAC before its fallback
+  const expected = crypto.createHmac('sha256', SECRET).update(JSON.stringify(claims)).digest('base64url');
+  assert.strictEqual(transformed.headers['x-mcp-claims-sig'], expected);
+});
+
+test('ill-typed userId is dropped, not forwarded (target validator would deny)', async () => {
+  const out = await handler(makeEvent({ sub: 's3', 'custom:user_id': 'not-a-number' }));
+  const claims = JSON.parse(out.mcp.transformedGatewayRequest.headers['x-mcp-claims']);
+  assert.strictEqual(claims.userId, undefined);
+  assert.strictEqual(claims.sub, 's3');
 });
 
 test('no full JWT content forwarded beyond selected fields', async () => {

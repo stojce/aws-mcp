@@ -1,0 +1,58 @@
+{
+  "openapi" : "3.0.1",
+  "info" : {
+    "title" : "mcp-demo-mcp",
+    "version" : "2026-10-21 10:11:45UTC"
+  },
+  "servers" : [ {
+    "url" : "https://wvh9uvtl84.execute-api.eu-west-1.amazonaws.com/{basePath}",
+    "variables" : {
+      "basePath" : {
+        "default" : ""
+      }
+    }
+  } ],
+  "tags" : [ {
+    "name" : "Project",
+    "x-amazon-apigateway-tag-value" : "mcp-http-api-example"
+  } ],
+  "paths" : {
+    "/mcp" : {
+      "x-amazon-apigateway-any-method" : {
+        "responses" : {
+          "default" : {
+            "description" : "Default response for ANY /mcp"
+          }
+        },
+        "security" : [ {
+          "cognito-mcp-client" : [ "mcp/read" ]
+        } ],
+        "x-amazon-apigateway-integration" : {
+          "payloadFormatVersion" : "2.0",
+          "type" : "aws_proxy",
+          "httpMethod" : "POST",
+          "uri" : "arn:aws:apigateway:eu-west-1:lambda:path/2015-03-31/functions/arn:aws:lambda:eu-west-1:062624617241:function:mcp-demo-mcp-server/invocations",
+          "connectionType" : "INTERNET",
+          "timeoutInMillis" : 28000
+        }
+      }
+    }
+  },
+  "components" : {
+    "securitySchemes" : {
+      "cognito-mcp-client" : {
+        "type" : "oauth2",
+        "flows" : { },
+        "x-amazon-apigateway-authorizer" : {
+          "identitySource" : "$request.header.Authorization",
+          "jwtConfiguration" : {
+            "audience" : [ "4kkai34toab23b5lancncvtbeh" ],
+            "issuer" : "https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_vaNyAkA6X"
+          },
+          "type" : "jwt"
+        }
+      }
+    }
+  },
+  "x-amazon-apigateway-importexport-version" : "1.0"
+}

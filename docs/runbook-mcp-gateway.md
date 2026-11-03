@@ -6,12 +6,19 @@ is the Gateway target; a request interceptor injects the per-user Claims
 (`userId`, `userRole`, `providerId`, `isAnonymous`) before the target runs.
 Decisions: `docs/adr/0001-agentcore-gateway-mcp.md`. Vocabulary: `GLOSSARY.md`.
 
-## Tools at v1 (verified per-user reads)
+## Tools as deployed (verified per-user reads)
 
-| MCP tool | Answers | Source operation |
+| MCP tool | Answers | Source operation (recruter-dev-api) |
 |---|---|---|
-| `get_my_booked_events` | "What have I booked this month?" | `getMyBookedEvents(startTime?)` |
-| `get_my_memberships` | "What memberships do I hold?" | `getMyMemberships(all?)` |
+| `get_my_jobs` | "What jobs are in the system?" | Gateway adapter `handle_list_my_jobs` (GET /jobs parity) |
+| `get_job_details` | "Tell me about this job" | `handle_get_job_details` (GET /jobs/{id} parity) |
+| `get_job_candidates` | "Who applied and how did they match?" | `handle_get_job_candidates` (GET /jobs/{id}/candidates parity) |
+
+The guryou-era `get_my_booked_events` / `get_my_memberships` were replaced when
+the example was deployed against `recruter-dev-api` (this account's python
+API); see `examples/customer-assistant/main.tf` and
+`recruter/services/functions/gateway_tools.py`. The guryou Apollo `graphql.ts`
+lambda lives in another account (org role not assumable by `mcp-demo`).
 
 No mutations at v1. `mcp.write` does not exist yet by design.
 
@@ -38,18 +45,40 @@ No mutations at v1. `mcp.write` does not exist yet by design.
 ## Smoke-verify the deployment
 
 ```bash
-node scripts/mcp-edge-smoke.mjs \
-  --url "<gateway_url>" \
-  --token "<user_access_token>" \
-  --token-web-client "<web_app_client_token>" \
-  --token-no-scope "<mcp_client_token_without_read>" \
-  --token-unscoped "<valid_jwt_lacking_resolvable_user_id>"
-# omit the two read asserts with --call skip; pick the other read:
-#   --call get_my_memberships --args '{"all":true}'
+cd examples/customer-assistant
+export MCP_TEST_CLIENT_ID=$(terraform output -raw mcp_app_client_id)
+export MCP_TEST_USERNAME=tester
+export MCP_TEST_USER='{"email":"tester@example.com","password":"..."}'
+node tests/run.js
 ```
 
-Expected: `tools/list` returns the two curated tools; the read returns only the
-calling user's data; negative token → HTTP 40x with no tool list.
+Two suites: `user-tools.test.mjs` (real hosted-UI login → tools/list → live
+reads → edge negatives) and `isolated-token.test.mjs` (forged/unsuitable JWTs
+all rejected). `scripts/mcp-edge-smoke.mjs` remains as the raw wire-level
+script with explicit token arguments for ad-hoc runs.
+
+Expected: `tools/list` returns the three curated tools; the read returns only
+the deployed data; negative token → HTTP 40x with no tool list.
+
+## Target Lambda secret wiring (required before any gateway call)
+
+The request interceptor signs the claims with `MCP_CLAIMS_SIGNING_SECRET`; the
+graphql target Lambda must verify with the same value. The module creates the
+SSM SecureString and exposes its **name** as the output
+`mcp_claims_signing_secret_ssm_name` (never the value).
+
+1. In `guryou-infra-terraform`, grant the graphql Lambda's execution role
+   `ssm:GetParameter` (+ `kms:Decrypt` for the SecureString key) on that name.
+2. Set `MCP_CLAIMS_SIGNING_SECRET` in the graphql Lambda environment, resolved
+   from the parameter (e.g. `data "aws_ssm_parameter"` with `with_decryption = true`,
+   value passed into the Lambda `environment` block). Do not commit the value.
+3. Verify: an unset variable makes the target deny every gateway invocation
+   (`MCP_CLAIMS_SIGNING_SECRET is not configured`). A deploy without step 2 is
+   therefore visibly broken, not silently open.
+
+Rotating the secret means changing the SSM value and redeploying both the
+interceptor and the graphql Lambda together; until both match, every gateway
+call is denied.
 
 ## Operational notes
 

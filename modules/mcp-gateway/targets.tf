@@ -38,11 +38,11 @@ resource "aws_bedrockagentcore_gateway_target" "lambda_targets" {
               description = "Arguments for ${each.value.tool_name}"
 
               dynamic "property" {
-                for_each = jsondecode(each.value.input_schema).properties != null ? jsondecode(each.value.input_schema).properties : {}
+                for_each = jsondecode(each.value.input_schema).properties != null ? tolist([for k, v in jsondecode(each.value.input_schema).properties : { key = k, type = v.type, description = lookup(v, "description", null) }]) : []
                 content {
                   name        = property.key
                   type        = property.value.type
-                  description = lookup(property.value, "description", null)
+                  description = property.value.description
                   required    = contains(try(jsondecode(each.value.input_schema).required, []), property.key)
                 }
               }
@@ -51,15 +51,15 @@ resource "aws_bedrockagentcore_gateway_target" "lambda_targets" {
             dynamic "output_schema" {
               for_each = each.value.output_schema != null ? [each.value.output_schema] : []
               content {
-                type = "object"
+                type        = "object"
                 description = "Result envelope"
 
                 dynamic "property" {
-                  for_each = jsondecode(output_schema.value).properties != null ? jsondecode(output_schema.value).properties : {}
+                  for_each = jsondecode(output_schema.value).properties != null ? tolist([for k, v in jsondecode(output_schema.value).properties : { key = k, type = v.type, description = lookup(v, "description", null) }]) : []
                   content {
                     name        = property.key
                     type        = property.value.type
-                    description = lookup(property.value, "description", null)
+                    description = property.value.description
                     required    = contains(try(jsondecode(output_schema.value).required, []), property.key)
                   }
                 }

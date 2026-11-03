@@ -6,8 +6,8 @@
 # it is added when the first mutation tool is designed (its review checkpoint
 # must exist before the scope is granted).
 resource "aws_cognito_resource_server" "mcp" {
-  identifier = local.scope_prefix
-  name       = local.resource_server_name
+  identifier   = local.scope_prefix
+  name         = local.resource_server_name
   user_pool_id = var.user_pool_id
 
   scope {
@@ -23,14 +23,19 @@ resource "aws_cognito_user_pool_client" "mcp" {
   name         = local.client_name
   user_pool_id = var.user_pool_id
 
+  # Cognito propagates resource-server scopes asynchronously; without this
+  # edge the client can be created before "mcp/read" is resolvable and fail
+  # with ScopeDoesNotExistException.
+  depends_on = [aws_cognito_resource_server.mcp]
+
   # Confidential client, authorization-code + PKCE. No client_credentials sub
   # would be the client id, not the user — breaking per-user isolation.
   allowed_oauth_flows_user_pool_client = true
   allowed_oauth_flows                  = ["code"]
   # Scope reference must be the fully-qualified form (resource-server
   # identifier + scope name) Cognito issues in access tokens: "mcp/read".
-  allowed_oauth_scopes                 = ["mcp/read"]
-  explicit_auth_flows                  = ["ALLOW_REFRESH_TOKEN_AUTH"]
+  allowed_oauth_scopes = ["mcp/read"]
+  explicit_auth_flows  = ["ALLOW_REFRESH_TOKEN_AUTH"]
 
   callback_urls = [var.web_client_callback_url]
   logout_urls   = [var.web_client_logout_url]
@@ -117,9 +122,14 @@ resource "aws_bedrockagentcore_gateway" "this" {
 
       # Bind to the dedicated MCP app client ONLY. Web-app client tokens
       # cannot be replayed at the MCP edge.
-      allowed_audience = [aws_cognito_user_pool_client.mcp.id]
-      allowed_clients  = [aws_cognito_user_pool_client.mcp.id]
-      allowed_scopes   = ["mcp/read"]
+      #
+      # Deliberately NO allowed_audience: Cognito v2 access tokens (the only
+      # kind the hosted-UI code+PKCE flow issues from this client) carry no
+      # `aud` claim at all; AgentCore rejects every token when audience
+      # binding is set (insufficient_scope). client_id binding + scope check
+      # keep the edge bound to this client.
+      allowed_clients = [aws_cognito_user_pool_client.mcp.id]
+      allowed_scopes  = ["mcp/read"]
     }
   }
 

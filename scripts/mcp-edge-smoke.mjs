@@ -21,7 +21,7 @@
  *     --token-web-client <web_app_client_token> \
  *     --token-no-scope <mcp_client_token_without_read_scope> \
  *     --token-unscoped <valid_jwt_without_resolvable_userId> \
- *     [--call <tool_name>]          # default: get_my_booked_events; 'skip' to omit call asserts
+ *     [--call <tool_name>]          # default: get_my_jobs; 'skip' to omit call asserts
  *     [--args '{"startTime":"2030-03-01"}']
  *
  * Exit code 0 = all asserts passed; 1 = failure (details on stderr).
@@ -78,7 +78,7 @@ const main = async () => {
   const args = parseArgs();
 
   // 1. valid token: list tools must equal the curated v1 names exactly
-  const CURATED = ['get_my_booked_events', 'get_my_memberships'];
+  const CURATED = ['get_my_jobs', 'get_job_details', 'get_job_candidates'];
   const list = await mcp(args.url, args.token, 'tools/list', {});
   if (list.status !== 200) {
     fail(`tools/list with a valid token: HTTP ${list.status}: ${list.text.slice(0, 300)}`);
@@ -101,7 +101,7 @@ const main = async () => {
   // 2. call a read: per-user data only
   if (args.call !== 'skip') {
     const call = await mcp(args.url, args.token, 'tools/call', {
-      name: args.call ?? 'get_my_booked_events',
+      name: args.call ?? 'get_my_jobs',
       arguments: args.args ? JSON.parse(args.args) : {},
     });
     if (call.status !== 200) {
@@ -123,7 +123,7 @@ const main = async () => {
       fail('missing required --token-unscoped (a token the gateway authorizer accepts but whose claims lack userId)');
     }
     const stripped = await mcp(args.url, args['token-unscoped'], 'tools/call', {
-      name: args.call ?? 'get_my_booked_events',
+      name: args.call ?? 'get_my_jobs',
       arguments: {},
     });
     if (stripped.status === 200 && stripped.body?.result && !stripped.body.result.isError) {

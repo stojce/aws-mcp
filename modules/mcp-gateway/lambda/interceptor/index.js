@@ -33,7 +33,7 @@
 
 const crypto = require('crypto');
 
-const SELECT_KEYS = ['userId', 'userRole', 'providerId', 'isAnonymous', 'sub', 'email'];
+const SELECT_KEYS = ['userId', 'userRole', 'providerId', 'isAnonymous', 'sub', 'email', 'username'];
 // Cognito custom attributes and standard claims carry the same identity
 // facts under different names; normalize to the app-level names.
 const SOURCE_KEYS = {
@@ -43,6 +43,16 @@ const SOURCE_KEYS = {
   isAnonymous: ['custom:is_anonymous', 'isAnonymous', 'is_anonymous'],
   sub: ['sub'],
   email: ['email'],
+};
+
+// Exactly the shape the target's gatewayClaims validator accepts
+// (libs/auth-cognito/gatewayClaims.js): userId positive integer, providerId
+// integer, userRole string, isAnonymous boolean. Ill-typed values are dropped
+// (→ undefined) rather than denied: sub/email still travel, letting the
+// target's claims-fallback resolve the identity DB-side (ticket 12 contract).
+const toIntOrNull = v => {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : NaN;
+  return Number.isInteger(n) && n >= 1 ? n : null;
 };
 
 const decodeJwtPayload = authHeader => {
@@ -58,15 +68,23 @@ const decodeJwtPayload = authHeader => {
 
 const pickClaims = claims => {
   const out = {};
-  for (const field of SELECT_KEYS) {
-    const key = (SOURCE_KEYS[field] || [field]).find(k => claims[k] !== undefined && claims[k] !== null);
-    if (key !== undefined) {
-      out[field] = field === 'isAnonymous' ? String(claims[key]) === 'true' : claims[key];
-    }
+  const userId = toIntOrNull(
+    SOURCE_KEYS.userId.map(k => claims[k]).find(v => v !== undefined && v !== null)
+  );
+  if (userId) out.userId = userId;
+  const providerId = toIntOrNull(
+    SOURCE_KEYS.providerId.map(k => claims[k]).find(v => v !== undefined && v !== null)
+  );
+  if (providerId) out.providerId = providerId;
+  const role = SOURCE_KEYS.userRole.map(k => claims[k]).find(v => typeof v === 'string');
+  if (role) out.userRole = role;
+  // boolean, or the legacy string forms; anything else → false
+  const anon = SOURCE_KEYS.isAnonymous.map(k => claims[k]).find(v => v !== undefined && v !== null);
+  out.isAnonymous = anon === true || String(anon) === 'true';
+  for (const field of ['sub', 'email', 'username']) {
+    const v = claims[field];
+    if (typeof v === 'string' && v) out[field] = v;
   }
-  // The app-level claims set always carries isAnonymous (normalizeClaims
-  // contract); an absent flag means a real user.
-  if (!('isAnonymous' in out)) out.isAnonymous = false;
   return out;
 };
 
@@ -107,9 +125,11 @@ exports.handler = async event => {
   }
 
   const selected = pickClaims(claims);
-  if (!selected.userId) {
-    return denyEnvelope('userId not resolvable from token claims');
-  }
+  // sub always present (checked above); email travels when the token carries
+  // it. userId may be ABSENT: the target resolves it from sub/email via
+  // resolveMissingClaims (ticket 12 claims-fallback contract; ticket 14
+  // round-2 parity). The earlier hard deny here made every token whose
+  // pre-token trigger didn't stamp custom attrs unusable at the MCP edge.
 
   const claimsJson = JSON.stringify(selected);
   return {

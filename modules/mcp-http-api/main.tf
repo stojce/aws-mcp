@@ -1,0 +1,242 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# 1. Cognito: resource server + dedicated MCP app client (existing pool)
+# ──────────────────────────────────────────────────────────────────────────────
+
+resource "aws_cognito_resource_server" "mcp" {
+  identifier   = local.resource_server_id
+  name         = "${var.name}-mcp"
+  user_pool_id = var.user_pool_id
+
+  scope {
+    scope_name        = var.scope_name
+    scope_description = "Read-only MCP access for the signed-in user"
+  }
+}
+
+resource "aws_cognito_user_pool_client" "mcp" {
+  name         = "${var.name}-mcp-client"
+  user_pool_id = var.user_pool_id
+
+  # Scope propagation is asynchronous; without this the client create can fail
+  # with ScopeDoesNotExistException.
+  depends_on = [aws_cognito_resource_server.mcp]
+
+  # Public client + PKCE: the agent runs on the user's machine or in a browser.
+  generate_secret                      = false
+  allowed_oauth_flows_user_pool_client = true
+  allowed_oauth_flows                  = ["code"]
+  allowed_oauth_scopes                 = ["openid", "email", local.full_scope]
+  supported_identity_providers         = ["COGNITO"]
+  explicit_auth_flows = concat(
+    ["ALLOW_REFRESH_TOKEN_AUTH"],
+    var.enable_password_auth_for_tests ? ["ALLOW_USER_PASSWORD_AUTH"] : []
+  )
+
+  callback_urls = var.callback_urls
+  logout_urls   = var.logout_urls
+
+  access_token_validity  = 60
+  id_token_validity      = 60
+  refresh_token_validity = 30
+  token_validity_units {
+    access_token  = "minutes"
+    id_token      = "minutes"
+    refresh_token = "days"
+  }
+
+  prevent_user_existence_errors = "ENABLED"
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 2. MCP Lambda: code + generated tools manifest packaged together
+# ──────────────────────────────────────────────────────────────────────────────
+
+data "archive_file" "mcp_server" {
+  type        = "zip"
+  output_path = "${path.module}/.build/mcp-server.zip"
+
+  source {
+    content  = local.tools_manifest
+    filename = "tools.json"
+  }
+
+  source {
+    content  = file("${path.module}/lambda/mcp-server/index.mjs")
+    filename = "index.mjs"
+  }
+
+  source {
+    content  = file("${path.module}/lambda/mcp-server/runtime.mjs")
+    filename = "runtime.mjs"
+  }
+}
+
+resource "aws_iam_role" "mcp" {
+  name = "${var.name}-mcp-server"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Action    = "sts:AssumeRole"
+      Principal = { Service = "lambda.amazonaws.com" }
+    }]
+  })
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "mcp_logs" {
+  role       = aws_iam_role.mcp.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_iam_role_policy" "invoke_backend" {
+  name = "invoke-tool-backend"
+  role = aws_iam_role.mcp.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "lambda:InvokeFunction"
+      Resource = var.tool_backend_arn
+    }]
+  })
+}
+
+resource "aws_cloudwatch_log_group" "mcp" {
+  name              = "/aws/lambda/${var.name}-mcp-server"
+  retention_in_days = var.log_retention_days
+  tags              = var.tags
+}
+
+resource "aws_lambda_function" "mcp" {
+  function_name    = "${var.name}-mcp-server"
+  role             = aws_iam_role.mcp.arn
+  runtime          = "nodejs22.x"
+  handler          = "index.handler"
+  filename         = data.archive_file.mcp_server.output_path
+  source_code_hash = data.archive_file.mcp_server.output_base64sha256
+  memory_size      = var.lambda_memory_mb
+  timeout          = var.lambda_timeout_s
+
+  environment {
+    variables = {
+      MCP_CLIENT_ID                   = aws_cognito_user_pool_client.mcp.id
+      MCP_REQUIRED_SCOPE              = local.full_scope
+      MCP_RESOURCE_URL                = local.mcp_url
+      MCP_RESOURCE_METADATA_URL       = local.resource_metadata_url
+      MCP_AUTHORIZATION_SERVER        = local.cognito_issuer
+      MCP_ALLOW_UNBOUND_ACCESS_TOKENS = tostring(var.allow_unbound_access_tokens)
+      TOOL_BACKEND_ARN                = var.tool_backend_arn
+    }
+  }
+
+  depends_on = [aws_cloudwatch_log_group.mcp, aws_iam_role_policy_attachment.mcp_logs]
+
+  tags = var.tags
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 3. HTTP API: /mcp guarded by the native JWT authorizer (scope check at edge)
+# ──────────────────────────────────────────────────────────────────────────────
+
+resource "aws_apigatewayv2_api" "mcp" {
+  name          = "${var.name}-mcp"
+  protocol_type = "HTTP"
+  tags          = var.tags
+}
+
+resource "aws_apigatewayv2_authorizer" "cognito" {
+  api_id           = aws_apigatewayv2_api.mcp.id
+  name             = "cognito-mcp-client"
+  authorizer_type  = "JWT"
+  identity_sources = ["$request.header.Authorization"]
+
+  jwt_configuration {
+    issuer = local.cognito_issuer
+    # Cognito resource indicators put the canonical MCP URI in aud. API Gateway
+    # checks client_id only when aud is absent; the runtime always pins client_id.
+    audience = concat(
+      [local.mcp_url],
+      var.allow_unbound_access_tokens ? [aws_cognito_user_pool_client.mcp.id] : []
+    )
+  }
+}
+
+resource "aws_apigatewayv2_integration" "mcp" {
+  api_id                 = aws_apigatewayv2_api.mcp.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = aws_lambda_function.mcp.invoke_arn
+  payload_format_version = "2.0"
+  timeout_milliseconds   = (var.lambda_timeout_s * 1000) - 1000
+}
+
+# ANY so the Lambda owns method policy (405 for non-POST). Auth still runs first.
+resource "aws_apigatewayv2_route" "mcp" {
+  api_id               = aws_apigatewayv2_api.mcp.id
+  route_key            = "ANY /mcp"
+  target               = "integrations/${aws_apigatewayv2_integration.mcp.id}"
+  authorization_type   = "JWT"
+  authorizer_id        = aws_apigatewayv2_authorizer.cognito.id
+  authorization_scopes = [local.full_scope]
+}
+
+# Discovery must be readable before the client has an access token.
+resource "aws_apigatewayv2_route" "resource_metadata" {
+  for_each = toset([
+    "GET /.well-known/oauth-protected-resource/mcp",
+    "GET /.well-known/oauth-protected-resource",
+  ])
+
+  api_id             = aws_apigatewayv2_api.mcp.id
+  route_key          = each.value
+  target             = "integrations/${aws_apigatewayv2_integration.mcp.id}"
+  authorization_type = "NONE"
+}
+
+resource "aws_cloudwatch_log_group" "api_access" {
+  name              = "/aws/apigateway/${var.name}-mcp"
+  retention_in_days = var.log_retention_days
+  tags              = var.tags
+}
+
+resource "aws_apigatewayv2_stage" "default" {
+  api_id      = aws_apigatewayv2_api.mcp.id
+  name        = "$default"
+  auto_deploy = true
+
+  default_route_settings {
+    throttling_burst_limit = 50
+    throttling_rate_limit  = 20
+  }
+
+  access_log_settings {
+    destination_arn = aws_cloudwatch_log_group.api_access.arn
+    format = jsonencode({
+      requestId      = "$context.requestId"
+      ip             = "$context.identity.sourceIp"
+      requestTime    = "$context.requestTime"
+      httpMethod     = "$context.httpMethod"
+      routeKey       = "$context.routeKey"
+      status         = "$context.status"
+      responseLength = "$context.responseLength"
+      integrationErr = "$context.integrationErrorMessage"
+      authError      = "$context.authorizer.error"
+      sub            = "$context.authorizer.claims.sub"
+    })
+  }
+
+  tags = var.tags
+}
+
+resource "aws_lambda_permission" "apigw_invoke_mcp" {
+  statement_id  = "AllowHttpApiInvokeMcp"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.mcp.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.mcp.execution_arn}/*/*"
+}
+
+data "aws_region" "current" {}

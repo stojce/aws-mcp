@@ -33,6 +33,16 @@ output "interceptor_lambda_arn" {
   value       = aws_lambda_function.interceptor.arn
 }
 
+# The target (graphql) Lambda must verify the interceptor's claims HMAC, so it
+# needs the same secret. Expose only the SSM parameter NAME (never the value);
+# the consumer resolves it with ssm:GetParameter(WithDecryption) and sets
+# MCP_CLAIMS_SIGNING_SECRET on the target Lambda. See the runbook section
+# "Target Lambda secret wiring".
+output "mcp_claims_signing_secret_ssm_name" {
+  description = "SSM SecureString name holding MCP_CLAIMS_SIGNING_SECRET. Grant the target Lambda's role ssm:GetParameter on it and inject the value as MCP_CLAIMS_SIGNING_SECRET."
+  value       = aws_ssm_parameter.mcp_claims_signing_secret.name
+}
+
 output "tool_names" {
   description = "MCP tool names exposed by the Gateway targets (ordered as declared)."
   value       = [for t in var.targets : t.tool_name]
