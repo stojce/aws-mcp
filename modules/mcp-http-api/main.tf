@@ -3,7 +3,7 @@
 # ──────────────────────────────────────────────────────────────────────────────
 
 resource "aws_cognito_resource_server" "mcp" {
-  identifier   = local.resource_server_id
+  identifier   = var.resource_server_identifier
   name         = "${var.name}-mcp"
   user_pool_id = var.user_pool_id
 

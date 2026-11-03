@@ -8,9 +8,9 @@ AgentCore Gateway, no interceptor, no shared HMAC secret.
 
 | Resource | Purpose |
 |---|---|
-| `aws_cognito_resource_server` | `mcp` resource server with scope `read` (token form `mcp/read`) |
+| `aws_cognito_resource_server` | Resource server with configurable identifier and scope (defaults: `mcp`, `read`; token form `mcp/read`) |
 | `aws_cognito_user_pool_client` | Dedicated public PKCE client; the only `client_id` the MCP Lambda accepts |
-| `aws_apigatewayv2_api` + authorizer + `ANY /mcp` route | Edge JWT check with `authorization_scopes = ["mcp/read"]` |
+| `aws_apigatewayv2_api` + authorizer + `ANY /mcp` route | Edge JWT check enforcing the fully qualified `required_scope` |
 | `aws_lambda_function` (MCP server) | JSON-RPC over Streamable HTTP; invokes the tool backend |
 | IAM role | `lambda:InvokeFunction` on `tool_backend_arn` only |
 
@@ -24,8 +24,8 @@ the `aws_region.region` attribute introduced in v6.
 
 1. Client sends `Authorization: Bearer <access token>` from the MCP app client.
 2. API Gateway validates signature, issuer, audience (= MCP client id), expiry,
-   and that the token carries `mcp/read`. Failures return 401/403 here.
-3. The MCP Lambda re-checks `token_use=access`, `client_id`, `mcp/read`, and
+   and that the token carries `required_scope` (`mcp/read` by default). Failures return 401/403 here.
+3. The MCP Lambda re-checks `token_use=access`, `client_id`, `required_scope`, and
    `sub` (defence in depth; the Lambda never trusts the route alone).
 4. `tools/call` invokes the tool backend with `{ tool, arguments, identity: { sub, clientId } }`.
    `identity` comes only from the verified token. Client arguments cannot set it.
@@ -58,6 +58,42 @@ module "mcp" {
 ```
 
 The tool backend must scope every read by `event.identity.sub`.
+
+## Shared Cognito pools
+
+`resource_server_identifier` defaults to `mcp` to preserve existing deployments.
+Cognito requires identifiers to be unique within a user pool. Each instance of
+this module creates and owns its own resource server, so only one Terraform
+resource may own a given pool/identifier pair. Changing `name` or `scope_name`
+does not give that resource server a new identifier.
+
+When deploying multiple instances in the same pool, assign distinct identifiers,
+such as `mcp-bookings` and `mcp-catalog`. If the sibling `mcp-gateway` module or
+another owner already manages `mcp`, use a different identifier for every HTTP
+API instance. For example, add this input to the usage configuration above:
+
+```hcl
+resource_server_identifier = "mcp-bookings"
+```
+
+With the default `scope_name = "read"`, this produces `mcp-bookings/read`. The
+app client's allowed scopes, API route, Lambda checks, and OAuth discovery
+challenge all use that value. Clients should request the module's `required_scope`
+output; `mcp_resource_server_identifier` exposes the identifier itself. The
+identifier accepts 1–256 printable ASCII characters except spaces, double quotes,
+and backslashes; URL identifiers such as `https://bookings.example.com` are valid.
+
+This module does not reuse an existing resource server. Choose an unused
+identifier before the first deployment. Changing it on a deployed instance
+replaces the resource server and changes the required scope; clients must request
+the new scope and obtain new access tokens.
+
+The shared-pool regression tests use mocked providers and deploy no AWS resources:
+
+```bash
+terraform -chdir=modules/mcp-http-api init -backend=false
+terraform -chdir=modules/mcp-http-api test -filter=tests/resource-server.tftest.hcl
+```
 
 ## Lambda packages
 

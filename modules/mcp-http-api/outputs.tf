@@ -19,8 +19,13 @@ output "mcp_app_client_id" {
 }
 
 output "required_scope" {
-  description = "Scope the token must carry, e.g. mcp/read."
+  description = "Scope the token must carry: <resource_server_identifier>/<scope_name>, e.g. mcp/read by default."
   value       = local.full_scope
+}
+
+output "mcp_resource_server_identifier" {
+  description = "Identifier of the Cognito resource server owned by this module instance."
+  value       = aws_cognito_resource_server.mcp.identifier
 }
 
 output "mcp_server_function_name" {

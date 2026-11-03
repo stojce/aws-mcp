@@ -2,9 +2,9 @@
 
 Scope: all current code in `modules/mcp-http-api/`, including Terraform, the Lambda runtime, and tests. `examples/mcp-http-api/` was used as supporting context. This is a working-tree review, not a diff review; the module and example were untracked at review time.
 
-The review identified **0 Standards findings and 13 Spec findings, all P2**. No P1 findings were identified in this snapshot. Finding numbers such as R01 are identifiers, not priority ratings. The highest repair priority was the shared Lambda ZIP path across module instances. **R01 and R02 are now fixed; the other 11 findings remain open.**
+The review identified **0 Standards findings and 13 Spec findings, all P2**. No P1 findings were identified in this snapshot. Finding numbers such as R01 are identifiers, not priority ratings. The highest repair priority was the shared Lambda ZIP path across module instances. **R01, R02, and R03 are now fixed; the other 10 findings remain open.**
 
-No implementation files were changed during the original review. This report was updated after the R01 and R02 repairs on 2026-11-03; see their status and verification below.
+No implementation files were changed during the original review. This report was updated after the R01, R02, and R03 repairs on 2026-11-03; see their status and verification below.
 
 ## Findings index
 
@@ -12,7 +12,7 @@ No implementation files were changed during the original review. This report was
 |---|---|---|---|
 | R01 | P2 | Advertised AWS provider v5 support is incompatible | Fixed |
 | R02 | P2 | Module instances share the generated Lambda ZIP | Fixed |
-| R03 | P2 | Resource-server identifiers collide in a shared pool | Open |
+| R03 | P2 | Resource-server identifiers collide in a shared pool | Fixed |
 | R04 | P2 | Tool arguments are not validated against the full schema | Open |
 | R05 | P2 | Protocol headers and negotiated versions are inconsistent | Open |
 | R06 | P2 | Incoming Origin headers are not validated | Open |
@@ -74,11 +74,15 @@ Source: [Terraform references and filesystem paths](https://developer.hashicorp.
 
 Locations: `modules/mcp-http-api/variables.tf:87`–`88`; `modules/mcp-http-api/main.tf:5`–`8`.
 
-The resource-server identifier is always `mcp`. AWS requires a "unique resource server identifier" in a user pool. Changing `name` or `scope_name` does not change that identifier.
+At review time, the resource-server identifier was always `mcp`. AWS requires a "unique resource server identifier" in a user pool. Changing `name` or `scope_name` did not change that identifier.
 
 **Trigger and impact:** deploy two instances into one existing pool, or use a pool where the sibling `mcp-gateway` module already owns `mcp`. The additional create fails or introduces conflicting Terraform ownership.
 
 **Fix:** allow a configurable identifier, support an existing resource server, or centralize shared ownership. Document any intentional one-owner restriction.
+
+**Status: Fixed (2026-11-03).** The module now accepts `resource_server_identifier`, defaulting to `mcp` to preserve existing deployments. The resource server and fully qualified scope use that input, and `mcp_resource_server_identifier` exposes the managed identifier. Input validation matches Cognito's documented 1–256 character limit and character pattern, including URL identifiers. The README documents one owner per pool/identifier pair, distinct identifiers for shared pools and coexistence with `mcp-gateway`, and the replacement and token-scope implications of changing a deployed identifier. This module continues to create its own resource server; it does not adopt another owner's existing resource server.
+
+**Regression verification:** the new Terraform suite first reproduced the hard-coded identifier: a configured URL identifier still yielded `mcp` and `mcp/bookings.read`. After the repair, all **8 scenarios passed**. They cover default compatibility, a custom identifier and scope propagated to the app client, JWT route, Lambda environment, and OAuth challenge, two module instances sharing one pool alongside a resource server representing the gateway's `mcp` ownership, and invalid empty, space-containing, quoted, backslash-containing, and overlong identifiers. The fixture asserts three distinct identifiers and separate HTTP API scopes. Both AWS and archive providers are mocked; no AWS deployment or live Cognito uniqueness check was performed. R13's separate discovery suite remains open and was not changed or rerun for this repair.
 
 Source: [Cognito CreateResourceServer](https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_CreateResourceServer.html).
 
@@ -229,6 +233,18 @@ Minimum-version checks used temporary copies with a provider-version override an
 
 The packaging test uses the real archive provider 2.8.1 and Terraform 1.17.1 with Node 26.13.0. Saved-plan apply is verified locally against archive data sources, without deploying AWS resources. Discovery tests and live OAuth interoperability were not rerun for R02; their original limitations below remain applicable.
 
+### R03 repair verification
+
+| Check | Result |
+|---|---|
+| Resource-server Terraform regression suite | 8/8 passed with mocked AWS and archive providers |
+| Combined repository Node unit suites | 34/34 passed |
+| Module and supporting example Terraform formatting | Passed |
+| Module Terraform validation | Passed with AWS provider 6.69.1 |
+| Supporting example Terraform validation | Passed with AWS provider 6.71.0 |
+
+The regression suite runs with `terraform -chdir=modules/mcp-http-api test -filter=tests/resource-server.tftest.hcl -no-color` after `terraform init -backend=false`. Verification used Terraform 1.17.1 and Node 26.13.0. The shared-pool fixture uses the real module twice with mocked providers; these checks establish the configured identifiers and scope wiring, without contacting Cognito or deploying resources. No live OAuth login was performed. Keeping the default identifier preserves existing resource-server identity; overriding a deployed identifier requires replacement and new token scopes.
+
 ### Original review verification
 
 | Check | Result |
@@ -256,4 +272,4 @@ During the original review, provider-v5 incompatibility and module ZIP collision
 
 Cognito discovery and the complete public authorization-code/PKCE flow still require live interoperability verification. The current public metadata routes, CloudFront authentication challenge, and resource-audience checks address the older review's absent-discovery and audience-configuration findings in code; this does not prove a positive end-to-end login. The saved-plan ignore rule is also present in the current working tree. Do not treat the older report's P1 findings as unchanged current findings without checking the implementation.
 
-Standards: **0 findings**. Spec: **13 P2 findings identified; R01 and R02 fixed, 11 still open**.
+Standards: **0 findings**. Spec: **13 P2 findings identified; R01, R02, and R03 fixed, 10 still open**.

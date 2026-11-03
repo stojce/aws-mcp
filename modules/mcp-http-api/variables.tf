@@ -50,6 +50,18 @@ variable "enable_password_auth_for_tests" {
   default     = false
 }
 
+variable "resource_server_identifier" {
+  description = "Cognito resource-server identifier, unique within user_pool_id. Each module instance owns its resource server; choose a distinct identifier when sharing a pool."
+  type        = string
+  default     = "mcp"
+  nullable    = false
+
+  validation {
+    condition     = can(regex("^[\\x21\\x23-\\x5B\\x5D-\\x7E]{1,256}$", var.resource_server_identifier))
+    error_message = "resource_server_identifier must contain 1–256 printable ASCII characters, excluding spaces, double quotes, and backslashes."
+  }
+}
+
 variable "scope_name" {
   description = "Scope name under the resource server. Tokens carry it as <resource_server_identifier>/<scope_name>."
   type        = string
@@ -84,8 +96,7 @@ variable "tags" {
 }
 
 locals {
-  resource_server_id    = "mcp"
-  full_scope            = "${local.resource_server_id}/${var.scope_name}"
+  full_scope            = "${var.resource_server_identifier}/${var.scope_name}"
   mcp_url               = "https://${aws_cloudfront_distribution.mcp.domain_name}/mcp"
   resource_metadata_url = "${aws_apigatewayv2_api.mcp.api_endpoint}/.well-known/oauth-protected-resource/mcp"
   cognito_issuer        = "https://cognito-idp.${data.aws_region.current.region}.amazonaws.com/${var.user_pool_id}"
