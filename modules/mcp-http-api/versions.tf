@@ -3,6 +3,7 @@ terraform {
 
   required_providers {
     aws = {
+      # The Cognito issuer uses aws_region.current.region, introduced in v6.
       source  = "hashicorp/aws"
       version = ">= 6, < 7"
     }

@@ -16,6 +16,10 @@ AgentCore Gateway, no interceptor, no shared HMAC secret.
 
 It does **not** create the user pool or the tool backend. Both are inputs.
 
+Requires Terraform 1.9+ and `hashicorp/aws >= 6.0.0, < 7.0.0`, matching the
+supporting example. AWS provider v5 is unsupported: the Cognito issuer uses
+the `aws_region.region` attribute introduced in v6.
+
 ## Request path
 
 1. Client sends `Authorization: Bearer <access token>` from the MCP app client.

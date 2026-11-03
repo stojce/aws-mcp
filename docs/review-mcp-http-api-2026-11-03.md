@@ -2,15 +2,15 @@
 
 Scope: all current code in `modules/mcp-http-api/`, including Terraform, the Lambda runtime, and tests. `examples/mcp-http-api/` was used as supporting context. This is a working-tree review, not a diff review; the module and example were untracked at review time.
 
-The review identified **0 Standards findings and 13 Spec findings, all P2**. No P1 findings were identified in this snapshot. Finding numbers such as R01 are identifiers, not priority ratings. The highest repair priority was the shared Lambda ZIP path across module instances. **R02 is now fixed; the other 12 findings remain open.**
+The review identified **0 Standards findings and 13 Spec findings, all P2**. No P1 findings were identified in this snapshot. Finding numbers such as R01 are identifiers, not priority ratings. The highest repair priority was the shared Lambda ZIP path across module instances. **R01 and R02 are now fixed; the other 11 findings remain open.**
 
-No implementation files were changed during the original review. This report was updated after the R02 repair on 2026-11-03; see its status and verification below.
+No implementation files were changed during the original review. This report was updated after the R01 and R02 repairs on 2026-11-03; see their status and verification below.
 
 ## Findings index
 
 | ID | Priority | Issue | Status |
 |---|---|---|---|
-| R01 | P2 | Advertised AWS provider v5 support is incompatible | Open |
+| R01 | P2 | Advertised AWS provider v5 support is incompatible | Fixed |
 | R02 | P2 | Module instances share the generated Lambda ZIP | Fixed |
 | R03 | P2 | Resource-server identifiers collide in a shared pool | Open |
 | R04 | P2 | Tool arguments are not validated against the full schema | Open |
@@ -42,11 +42,15 @@ The API Gateway HTTP API implementation is an intentional alternative to the ori
 
 Locations: `modules/mcp-http-api/variables.tf:91`; `modules/mcp-http-api/versions.tf:7`.
 
-The module permits `hashicorp/aws >= 5.80, < 7.0.0` but constructs its Cognito issuer with `data.aws_region.current.region`. Official provider source for v5.80.0 and v5.100.0 exposes `name`, `id`, `description`, and `endpoint`, without `region`.
+At review time, the module permitted `hashicorp/aws >= 5.80, < 7.0.0` but constructed its Cognito issuer with `data.aws_region.current.region`. Official provider source for v5.80.0 and v5.100.0 exposes `name`, `id`, `description`, and `endpoint`, without `region`.
 
 **Trigger and impact:** a consumer retaining a permitted v5 provider cannot validate the module because the referenced attribute does not exist. Passing validation with installed provider v6.69.1 does not establish v5 compatibility.
 
 **Fix:** use a region attribute supported by the advertised range, or raise the provider floor and align the example's constraint. Verify the resulting minimum supported version as well as the installed version.
+
+**Status: Fixed (2026-11-03).** The module and supporting example both require `hashicorp/aws >= 6.0.0, < 7.0.0`, excluding the incompatible v5 schema. The module README states this requirement, and the provider constraint records why the v6 floor is needed. Local lockfiles were refreshed to record the matching constraints while retaining their selected provider versions.
+
+**Compatibility verification:** temporary copies of the complete module and supporting example were pinned to the real AWS provider **6.0.0**, and both passed `terraform validate`. The provider ZIP matched HashiCorp's published SHA-256 checksum. Its schema exposes `aws_region.region`; a targeted plan evaluated the actual issuer expression to `https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_example` and contained no AWS resource changes. The working module and example also passed validation with their installed providers, **6.69.1** and **6.71.0**, respectively. No AWS deployment or live authentication was performed.
 
 Sources: [v5.80.0 region schema](https://github.com/hashicorp/terraform-provider-aws/blob/v5.80.0/internal/service/meta/region_data_source.go); [v5.100.0 region schema](https://github.com/hashicorp/terraform-provider-aws/blob/v5.100.0/internal/service/meta/region_data_source.go).
 
@@ -198,6 +202,20 @@ The mock provider supplies no valid defaults for IAM-role or CloudWatch log-grou
 
 ## Verification and limits
 
+### R01 repair verification
+
+| Check | Result |
+|---|---|
+| Complete module and supporting example validation at minimum AWS provider 6.0.0 | Both passed |
+| Actual Cognito issuer evaluation with AWS provider 6.0.0 | Passed; expected issuer, no AWS resource changes |
+| Working module validation with AWS provider 6.69.1 | Passed |
+| Working supporting example validation with AWS provider 6.71.0 | Passed |
+| Combined repository Node unit suites | 34/34 passed |
+| Module and supporting example Terraform formatting | Passed |
+| Repository-wide Terraform formatting | Flags existing `examples/customer-assistant/variables.tf` and `modules/mcp-gateway/variables.tf`; left unchanged |
+
+Minimum-version checks used temporary copies with a provider-version override and a local provider mirror, leaving the working configurations' selected provider versions intact. Terraform 1.17.1 and archive provider 2.8.1 were used. These checks exercise the real provider schema and issuer expression; they do not establish live OAuth interoperability.
+
 ### R02 repair verification
 
 | Check | Result |
@@ -238,4 +256,4 @@ During the original review, provider-v5 incompatibility and module ZIP collision
 
 Cognito discovery and the complete public authorization-code/PKCE flow still require live interoperability verification. The current public metadata routes, CloudFront authentication challenge, and resource-audience checks address the older review's absent-discovery and audience-configuration findings in code; this does not prove a positive end-to-end login. The saved-plan ignore rule is also present in the current working tree. Do not treat the older report's P1 findings as unchanged current findings without checking the implementation.
 
-Standards: **0 findings**. Spec: **13 P2 findings identified; R02 fixed, 12 still open**.
+Standards: **0 findings**. Spec: **13 P2 findings identified; R01 and R02 fixed, 11 still open**.
