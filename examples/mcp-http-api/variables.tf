@@ -15,6 +15,18 @@ variable "enable_password_auth_for_tests" {
   default     = true
 }
 
+variable "callback_urls" {
+  description = "Pre-registered authorization-code callbacks used by your MCP client."
+  type        = list(string)
+  default     = ["http://localhost:8080/callback"]
+}
+
+variable "allowed_origins" {
+  description = "Exact browser origins allowed to call MCP, for example http://localhost:8080. Native clients omit Origin and need no allowlist entry."
+  type        = set(string)
+  default     = []
+}
+
 variable "test_users" {
   description = "Two test users keyed by short name. Passwords are NOT here: set them with scripts/set-test-passwords.sh from env vars so they never enter Terraform state."
   type = map(object({

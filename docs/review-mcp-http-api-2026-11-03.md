@@ -2,9 +2,9 @@
 
 Scope: all current code in `modules/mcp-http-api/`, including Terraform, the Lambda runtime, and tests. `examples/mcp-http-api/` was used as supporting context. This is a working-tree review, not a diff review; the module and example were untracked at review time.
 
-The review identified **0 Standards findings and 13 Spec findings, all P2**. No P1 findings were identified in this snapshot. Finding numbers such as R01 are identifiers, not priority ratings. The highest repair priority was the shared Lambda ZIP path across module instances. **R01, R02, R03, R04, and R05 are now fixed; the other 8 findings remain open.**
+The review identified **0 Standards findings and 13 Spec findings, all P2**. No P1 findings were identified in this snapshot. Finding numbers such as R01 are identifiers, not priority ratings. The highest repair priority was the shared Lambda ZIP path across module instances. **All 13 findings are now fixed; zero remain open.**
 
-No implementation files were changed during the original review. This report was updated after the R01, R02, R03, R04, and R05 repairs on 2026-11-03; see their status and verification below.
+No implementation files were changed during the original review. This report was updated after the R01–R13 repairs on 2026-11-03; see their status and verification below. Original observations and earlier verification results are retained as history.
 
 ## Findings index
 
@@ -15,14 +15,14 @@ No implementation files were changed during the original review. This report was
 | R03 | P2 | Resource-server identifiers collide in a shared pool | Fixed |
 | R04 | P2 | Tool arguments are not validated against the full schema | Fixed |
 | R05 | P2 | Protocol headers and negotiated versions are inconsistent | Fixed |
-| R06 | P2 | Incoming Origin headers are not validated | Open |
-| R07 | P2 | Browser clients cannot complete CORS preflight | Open |
-| R08 | P2 | Request IDs and initialization parameters are not validated | Open |
-| R09 | P2 | Incoming JSON-RPC responses receive the wrong HTTP status | Open |
-| R10 | P2 | The public Cognito client does not rotate refresh tokens | Open |
-| R11 | P2 | Timeout inputs can produce invalid HTTP API integrations | Open |
-| R12 | P2 | Authentication documentation contradicts the strict default | Open |
-| R13 | P2 | Discovery tests fail before their assertions run | Open |
+| R06 | P2 | Incoming Origin headers are not validated | Fixed |
+| R07 | P2 | Browser clients cannot complete CORS preflight | Fixed |
+| R08 | P2 | Request IDs and initialization parameters are not validated | Fixed |
+| R09 | P2 | Incoming JSON-RPC responses receive the wrong HTTP status | Fixed |
+| R10 | P2 | The public Cognito client does not rotate refresh tokens | Fixed |
+| R11 | P2 | Timeout inputs can produce invalid HTTP API integrations | Fixed |
+| R12 | P2 | Authentication documentation contradicts the strict default | Fixed |
+| R13 | P2 | Discovery tests fail before their assertions run | Fixed |
 
 ## Implementation priority
 
@@ -82,7 +82,7 @@ At review time, the resource-server identifier was always `mcp`. AWS requires a 
 
 **Status: Fixed (2026-11-03).** The module now accepts `resource_server_identifier`, defaulting to `mcp` to preserve existing deployments. The resource server and fully qualified scope use that input, and `mcp_resource_server_identifier` exposes the managed identifier. Input validation matches Cognito's documented 1–256 character limit and character pattern, including URL identifiers. The README documents one owner per pool/identifier pair, distinct identifiers for shared pools and coexistence with `mcp-gateway`, and the replacement and token-scope implications of changing a deployed identifier. This module continues to create its own resource server; it does not adopt another owner's existing resource server.
 
-**Regression verification:** the new Terraform suite first reproduced the hard-coded identifier: a configured URL identifier still yielded `mcp` and `mcp/bookings.read`. After the repair, all **8 scenarios passed**. They cover default compatibility, a custom identifier and scope propagated to the app client, JWT route, Lambda environment, and OAuth challenge, two module instances sharing one pool alongside a resource server representing the gateway's `mcp` ownership, and invalid empty, space-containing, quoted, backslash-containing, and overlong identifiers. The fixture asserts three distinct identifiers and separate HTTP API scopes. Both AWS and archive providers are mocked; no AWS deployment or live Cognito uniqueness check was performed. R13's separate discovery suite remains open and was not changed or rerun for this repair.
+**Regression verification:** the new Terraform suite first reproduced the hard-coded identifier: a configured URL identifier still yielded `mcp` and `mcp/bookings.read`. After the repair, all **8 scenarios passed**. They cover default compatibility, a custom identifier and scope propagated to the app client, JWT route, Lambda environment, and OAuth challenge, two module instances sharing one pool alongside a resource server representing the gateway's `mcp` ownership, and invalid empty, space-containing, quoted, backslash-containing, and overlong identifiers. The fixture asserts three distinct identifiers and separate HTTP API scopes. Both AWS and archive providers are mocked; no AWS deployment or live Cognito uniqueness check was performed. At the time of this repair, R13's separate discovery suite remained open and was not changed or rerun; its subsequent repair is recorded below.
 
 Source: [Cognito CreateResourceServer](https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_CreateResourceServer.html).
 
@@ -130,6 +130,10 @@ There is no Origin policy or allowlist. MCP requires servers to "validate the Or
 
 **Fix:** define and enforce a policy for supplied Origin headers while accommodating native clients that omit them. Coordinate it with R07's browser-origin configuration.
 
+**Status: Fixed (2026-11-03).** `allowed_origins` configures exact canonical HTTP(S) origins and defaults to an empty set. The Lambda validates supplied Origin headers before dispatch, rejecting untrusted, malformed, or ambiguous values with HTTP 403. Native clients may omit Origin. The same input configures API Gateway and CloudFront CORS; wildcard, path-containing, credential-bearing, opaque, and invalid-port inputs are rejected during Terraform planning.
+
+**Regression verification:** runtime cases reject the original untrusted origin, deceptive suffixes, opaque origins, paths, credentials, combined values, and non-string values without invoking tools. Trusted origins are recognized case-insensitively by header name, and native requests still succeed. Terraform scenarios verify allowlist propagation and invalid configuration rejection. The extracted Lambda entrypoint also enforces the policy. These are local checks; no live DNS-rebinding or browser test was performed.
+
 Source: [MCP transport security](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#security-warning).
 
 ### R07 — P2: Browser clients cannot complete CORS preflight
@@ -141,6 +145,10 @@ The app-client comment explicitly includes browser clients, but the HTTP API has
 **Observed behavior:** the local adapter returned 401 for a representative unauthenticated browser preflight. The Terraform route also requires JWT authentication before integration.
 
 **Fix:** configure trusted browser origins, required methods and headers, and unauthenticated preflight handling. Expose `WWW-Authenticate` so browser clients can read OAuth discovery challenges. Keep server-side Origin validation explicit as described in R06.
+
+**Status: Fixed (2026-11-03).** Configured browser origins enable CORS for GET, POST, and OPTIONS with `Authorization`, `Content-Type`, `MCP-Protocol-Version`, and `Accept`. Explicit public OPTIONS routes take priority over `ANY /mcp`; the Lambda can return a bodyless 204 preflight response without JWT or protocol-version headers. API Gateway and CloudFront expose `WWW-Authenticate`, including native JWT failures that bypass Lambda. Ordinary MCP routes retain JWT, scope, and resource-audience checks. Cookie credentials are not enabled.
+
+**Regression verification:** local adapter and packaged-entrypoint tests verify public preflight and CORS on authentication challenges, and reject untrusted origins, disallowed methods, and unapproved headers. Terraform tests verify all three OPTIONS routes, shared API/CloudFront policies, and unchanged MCP authorization. Live preflight through API Gateway and CloudFront remains unverified.
 
 Source: [API Gateway HTTP API CORS](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-cors.html).
 
@@ -154,6 +162,10 @@ MCP requests must include a "string or integer ID" and must not use null. Initia
 
 **Fix:** validate the message envelope and method-specific parameters before routing. Reject malformed requests without invoking tools; retain notification behavior for valid notifications.
 
+**Status: Fixed (2026-11-03).** Message classification validates string or safe-integer request IDs, object parameters and `_meta`, and the separation of requests, notifications, and responses. Initialization requires a nonempty protocol version, capabilities object, and complete client information; known capability fields and cancellation parameters are checked. Invalid envelopes return HTTP 400 with JSON-RPC `-32600` and a null error ID. Invalid initialization parameters return `-32602` correlated to the valid request ID. Valid notifications still receive HTTP 202 without a body.
+
+**Regression verification:** cases cover the reported null, object, and fractional IDs, additional malformed IDs/envelopes, valid string and safe-integer IDs, missing initialization fields, invalid capability types, and valid/malformed cancellation notifications. Malformed tool requests cannot invoke the backend. The real ZIP test also checks malformed IDs through the extracted entrypoint.
+
 Sources: [MCP request IDs](https://modelcontextprotocol.io/specification/2025-06-18/basic#requests); [MCP initialization](https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle#initialization).
 
 ### R09 — P2: Incoming JSON-RPC responses receive the wrong HTTP status
@@ -165,6 +177,10 @@ An incoming JSON-RPC response is treated as an invalid request, but the adapter 
 **Observed behavior:** a syntactically valid JSON-RPC response produced HTTP 200 with error code `-32600`.
 
 **Fix:** classify responses explicitly and return the required HTTP status. This stateless server can reject unexpected responses without adding server-initiated messaging.
+
+**Status: Fixed (2026-11-03).** Incoming JSON-RPC responses are classified explicitly and rejected with HTTP 400 and `-32600`. The stateless server does not initiate requests needing client replies, so it does not accept responses with HTTP 202.
+
+**Regression verification:** incoming result and error responses, including mixed result/error envelopes, receive HTTP 400 without backend invocation. The extracted Lambda entrypoint verifies the transport status from the actual package.
 
 Source: [MCP sending messages to the server](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#sending-messages-to-the-server).
 
@@ -178,6 +194,10 @@ The client has no secret, issues 30-day refresh tokens, and does not enable rota
 
 **Fix:** configure refresh-token rotation and remove `ALLOW_REFRESH_TOKEN_AUTH`. Refresh through the OAuth token endpoint or Cognito's supported replacement API. Check the provider floor required by the rotation configuration and update relevant documentation.
 
+**Status: Fixed (2026-11-03).** The public app client enables refresh-token rotation with a five-second retry grace period and token revocation. `ALLOW_REFRESH_TOKEN_AUTH` is removed. An explicit SRP flow keeps Cognito's defaults from restoring legacy refresh authentication; direct password authentication remains test-only. Documentation describes OAuth refresh, atomic replacement of rotated refresh tokens, the original 30-day expiry window, and `GetTokensFromRefreshToken` for API integrations.
+
+**Regression verification:** Terraform scenarios verify rotation, revocation, and authentication flows with password authentication both disabled and explicitly enabled for tests. The complete module and example validate against the real minimum AWS provider 6.0.0, which supports rotation, so the provider floor is unchanged. No live refresh token was minted or rotated.
+
 Sources: [MCP token theft protections](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#token-theft); [Cognito refresh token rotation](https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-using-the-refresh-token.html).
 
 ### R11 — P2: Timeout inputs can produce invalid HTTP API integrations
@@ -189,6 +209,10 @@ The integration timeout is `(lambda_timeout_s * 1000) - 1000`, with no correspon
 **Trigger and impact:** input 60 produces 59,000 ms and exceeds the limit; input 1 produces zero. The configuration can validate but fail when AWS creates the integration. The default integration is 28 seconds.
 
 **Fix:** separate Lambda and integration deadlines, or constrain the coupled setting to a valid range. Budget cold starts and backend calls so the application can return before the gateway expires. Correct the documented quota.
+
+**Status: Fixed (2026-11-03).** `lambda_timeout_s` accepts integers from 3 to 31 and defaults to 29. The integration expires one second earlier, and tool waiting ends another second earlier: defaults are 28 and 27 seconds, respectively. The tool deadline starts at API Gateway's request timestamp, accounting for authorization, cold starts, and validation. Expired requests cannot invoke the backend; stalled calls return a tool timeout result and pass an abort signal into AWS SDK `send`. Timers are cleared after completion. The README now states the actual 30-second integration quota and explains that aborting the wait cannot stop an already running backend Lambda.
+
+**Regression verification:** Terraform cases verify the minimum and maximum budgets and reject inputs 1, 2, 32, 60, and fractional seconds. Runtime tests cover elapsed request time and a stalled backend; the real ZIP test verifies expired-deadline rejection, successful identity propagation, and the SDK abort signal through the entrypoint. These checks do not measure live cold starts or guarantee response latency through AWS.
 
 Source: [HTTP API quotas](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-quotas.html).
 
@@ -202,6 +226,10 @@ The README describes "audience (= MCP client id)" and acceptance of access token
 
 **Fix:** document the complete pre-registered authorization-code/PKCE flow, including `resource=mcp_url` in authorization and token requests. Explain the legacy option and update the supporting example's positive-login instructions and verification claims.
 
+**Status: Fixed (2026-11-03).** The module and example guides now describe pre-registered authorization-code/PKCE login, verifier and state handling, `resource=mcp_url` in authorization and token requests, resource-bound access tokens, refresh rotation, and the explicit legacy option. Historical unbound-token observations are labeled as historical. The example exposes authorization/token endpoints and configurable callback URLs and browser origins. Its smoke client checks the resource audience and negotiated protocol version; the optional resource-bound scope-denial fixture expects HTTP 403 without depending on a challenge header that CloudFront overrides.
+
+**Verification:** documentation matches the configured strict audience, dedicated app client, scope, Origin, protocol, and refresh policies. Both Terraform configurations validate, and the smoke script passes Bash syntax checking. The script was not executed against AWS; a complete resource-bound PKCE login remains a live interoperability check.
+
 Sources: [MCP resource indicators](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#resource-parameter-implementation); [Cognito authorization endpoint](https://docs.aws.amazon.com/cognito/latest/developerguide/authorization-endpoint.html).
 
 ### R13 — P2: Discovery tests fail before their assertions run
@@ -213,6 +241,10 @@ The mock provider supplies no valid defaults for IAM-role or CloudWatch log-grou
 **Observed behavior:** `terraform -chdir=modules/mcp-http-api test -no-color` failed at `aws_lambda_function.mcp.role` and `aws_apigatewayv2_stage.default.access_log_settings.destination_arn` with invalid-ARN errors. The first run failed and the second was skipped: **0 passed, 1 failed, 1 skipped**.
 
 **Fix:** supply valid ARN defaults for mocked resources and rerun both discovery scenarios. Address any further validator failures revealed after those defaults are corrected.
+
+**Status: Fixed (2026-11-03).** The discovery fixture supplies valid IAM-role, CloudWatch log-group, and API execution ARNs and mocks the archive provider. Subsequent assertion failures were corrected by comparing provider sets with `toset` and selecting the single CloudFront header item with `one` instead of indexing a set.
+
+**Regression verification:** both discovery scenarios now pass, including strict resource binding and explicit legacy compatibility. The complete Terraform suite passes **29/29 scenarios** with both the installed AWS provider and minimum provider 6.0.0. AWS execution is mocked; these tests do not contact Cognito or deploy resources.
 
 ## Verification and limits
 
@@ -241,7 +273,7 @@ Minimum-version checks used temporary copies with a provider-version override an
 | Supporting example Terraform validation | Passed with AWS provider 6.69.1 |
 | Repository-wide Terraform formatting | Flags unrelated `examples/customer-assistant/variables.tf` and `modules/mcp-gateway/variables.tf`; left unchanged |
 
-The packaging test uses the real archive provider 2.8.1 and Terraform 1.17.1 with Node 26.13.0. Saved-plan apply is verified locally against archive data sources, without deploying AWS resources. Discovery tests and live OAuth interoperability were not rerun for R02; their original limitations below remain applicable.
+The packaging test uses the real archive provider 2.8.1 and Terraform 1.17.1 with Node 26.13.0. Saved-plan apply is verified locally against archive data sources, without deploying AWS resources. Discovery tests and live OAuth interoperability were not rerun for R02. Later local discovery results are recorded below; live interoperability remains unverified.
 
 ### R03 repair verification
 
@@ -266,7 +298,7 @@ The regression suite runs with `terraform -chdir=modules/mcp-http-api test -filt
 | Module Terraform validation | Passed with AWS provider 6.69.1 |
 | Supporting example Terraform validation | Passed with AWS provider 6.71.0 |
 
-Verification used Node 22.23.4, Node 26.13.0, and Terraform 1.17.1. The generated bundle targets Node 22. Runtime dependencies are pinned to Ajv 8.20.0 and ajv-formats 3.0.1, bundled with esbuild 0.28.2. All checks ran locally without AWS deployment or live OAuth login. At the time of the R04 repair, R05–R13 remained open; R05's subsequent repair is recorded below. The separate discovery suite was not rerun.
+Verification used Node 22.23.4, Node 26.13.0, and Terraform 1.17.1. The generated bundle targets Node 22. Runtime dependencies are pinned to Ajv 8.20.0 and ajv-formats 3.0.1, bundled with esbuild 0.28.2. All checks ran locally without AWS deployment or live OAuth login. At the time of the R04 repair, R05–R13 remained open; their subsequent repairs are recorded below. The separate discovery suite was not rerun for R04.
 
 ### R05 repair verification
 
@@ -280,7 +312,26 @@ Verification used Node 22.23.4, Node 26.13.0, and Terraform 1.17.1. The generate
 | Supporting example Terraform validation | Passed |
 | Repository-wide Terraform formatting | Flags existing `examples/customer-assistant/variables.tf` and `modules/mcp-gateway/variables.tf`; left unchanged |
 
-Verification used Node 22.23.4, Node 26.13.0, and Terraform 1.17.1. The smoke script was checked with `bash -n examples/mcp-http-api/scripts/smoke.sh`; it was not run against deployed resources. The archive regression uses local data-source plans and saved-plan apply, without AWS deployment. R06–R13 remain open, and the separate discovery suite was not rerun for this repair.
+Verification used Node 22.23.4, Node 26.13.0, and Terraform 1.17.1. The smoke script was checked with `bash -n examples/mcp-http-api/scripts/smoke.sh`; it was not run against deployed resources. The archive regression uses local data-source plans and saved-plan apply, without AWS deployment. At the time of the R05 repair, R06–R13 remained open and the separate discovery suite was not rerun; their subsequent repairs are recorded above.
+
+### R06–R13 repair verification
+
+| Check | Result |
+|---|---|
+| Combined repository Node unit suites, including Origin, envelope, response, and deadline regressions | 57/57 passed on Node 22.23.4 and Node 26.13.0 |
+| Complete module Terraform test suite with installed AWS provider 6.69.1 | 29/29 passed, including both discovery scenarios |
+| Complete module Terraform test suite with minimum AWS provider 6.0.0 | 29/29 passed |
+| Complete module and supporting example validation at minimum AWS provider 6.0.0 | Both passed |
+| Working module and supporting example validation | Both passed with AWS providers 6.69.1 and 6.71.0, respectively |
+| Real archive isolation, ZIP contents/hashes, extracted runtime and entrypoint, and saved-plan apply | 1/1 passed on Node 22 |
+| Module and supporting example Terraform formatting | Passed |
+| Example smoke script Bash syntax | Passed |
+| Working-tree whitespace check | Passed |
+| Repository-wide Terraform formatting | Flags existing `examples/customer-assistant/variables.tf` and `modules/mcp-gateway/variables.tf`; left unchanged |
+
+Verification used Terraform 1.17.1 and archive provider 2.8.1. Minimum-provider checks used temporary copies of the complete module and example and a local provider mirror; the AWS 6.0.0 ZIP matched HashiCorp's published SHA-256 checksum. Terraform scenarios mock AWS and archive execution. The separate packaging regression uses real archive data sources and saved-plan apply, then runs the extracted Lambda with a local SDK stub to verify Origin/preflight behavior, malformed IDs, response status, schema rejection, expired deadlines, trusted identity, and SDK abort signals.
+
+All checks were local. No AWS deployment, live OAuth login, browser preflight through AWS, refresh-token minting/rotation, or live smoke execution was performed. Aborting an SDK request does not cancel a backend Lambda that is already running. Local regression results establish the repairs in code and configuration; complete resource-bound OAuth and browser interoperability still require verification after deployment.
 
 ### Original review verification
 
@@ -303,10 +354,10 @@ terraform -chdir=examples/mcp-http-api validate -no-color
 terraform -chdir=modules/mcp-http-api test -no-color
 ```
 
-Available tools were Node 26.13.0 and Terraform 1.17.1; archive provider 2.8.1 was installed. Node 22 was not independently tested. No AWS deployment, state refresh, live token minting, or full OAuth login was performed.
+At original review time, available tools were Node 26.13.0 and Terraform 1.17.1; archive provider 2.8.1 was installed. Node 22 was not independently tested during that review. No AWS deployment, state refresh, live token minting, or full OAuth login was performed.
 
 During the original review, provider-v5 incompatibility and module ZIP collisions were established from configuration and official source/documentation; a v5 binary and a two-instance AWS deployment were not used. R02 now also has real ZIP regression verification as described above. Origin acceptance does not establish an authentication bypass.
 
 Cognito discovery and the complete public authorization-code/PKCE flow still require live interoperability verification. The current public metadata routes, CloudFront authentication challenge, and resource-audience checks address the older review's absent-discovery and audience-configuration findings in code; this does not prove a positive end-to-end login. The saved-plan ignore rule is also present in the current working tree. Do not treat the older report's P1 findings as unchanged current findings without checking the implementation.
 
-Standards: **0 findings**. Spec: **13 P2 findings identified; R01, R02, R03, R04, and R05 fixed, 8 still open**.
+Standards: **0 findings**. Spec: **13 P2 findings identified; all 13 fixed, zero open**.

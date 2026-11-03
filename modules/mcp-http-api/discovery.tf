@@ -13,6 +13,29 @@ data "aws_cloudfront_origin_request_policy" "api_gateway" {
 resource "aws_cloudfront_response_headers_policy" "discovery" {
   name = "${var.name}-mcp-discovery"
 
+  # Native JWT failures bypass the Lambda. Add CORS at the advertised endpoint
+  # too, so trusted browser clients can read the OAuth discovery challenge.
+  dynamic "cors_config" {
+    for_each = length(var.allowed_origins) > 0 ? [1] : []
+    content {
+      access_control_allow_credentials = false
+      origin_override                  = true
+      access_control_max_age_sec       = 300
+      access_control_allow_origins {
+        items = sort(tolist(var.allowed_origins))
+      }
+      access_control_allow_methods {
+        items = local.cors_methods
+      }
+      access_control_allow_headers {
+        items = local.cors_request_headers
+      }
+      access_control_expose_headers {
+        items = local.cors_expose_headers
+      }
+    }
+  }
+
   custom_headers_config {
     items {
       header   = "WWW-Authenticate"

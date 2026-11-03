@@ -159,6 +159,78 @@ test('module packages remain isolated through intervening plans and saved-plan a
     assert.deepEqual(seen, [{ tool: tools[0].name, arguments: { count: 1 }, identity }]);
   `], { cwd: extractedPackage });
 
+  // Exercise the packaged entrypoint with the runtime-provided AWS SDK replaced
+  // by a local stub. No credentials or AWS requests are used by this process.
+  const sdkDirectory = path.join(extractedPackage, 'node_modules/@aws-sdk/client-lambda');
+  await mkdir(sdkDirectory, { recursive: true });
+  await writeFile(path.join(sdkDirectory, 'package.json'), JSON.stringify({
+    name: '@aws-sdk/client-lambda', type: 'module', exports: './index.mjs',
+  }));
+  await writeFile(path.join(sdkDirectory, 'index.mjs'), `
+    export const calls = [];
+    export class InvokeCommand {
+      constructor(input) { this.input = input; }
+    }
+    export class LambdaClient {
+      async send(command, options = {}) {
+        const payload = JSON.parse(Buffer.from(command.input.Payload).toString('utf8'));
+        calls.push({ input: command.input, payload, signal: options.abortSignal });
+        if (payload.arguments.count === 2) {
+          return new Promise((resolve, reject) => {
+            options.abortSignal.addEventListener('abort', () => reject(new Error('SDK request aborted')), { once: true });
+          });
+        }
+        return { Payload: Buffer.from(JSON.stringify({ owner: payload.identity.sub })) };
+      }
+    }
+  `);
+  await execute(process.execPath, ['--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import { readFile } from 'node:fs/promises';
+    import { calls } from '@aws-sdk/client-lambda';
+    const resource = 'https://mcp.example.com/mcp';
+    const origin = 'https://app.example.com';
+    const identity = { sub: 'verified-user', clientId: 'verified-client' };
+    Object.assign(process.env, {
+      MCP_CLIENT_ID: identity.clientId, MCP_REQUIRED_SCOPE: 'mcp/read', MCP_RESOURCE_URL: resource,
+      MCP_RESOURCE_METADATA_URL: 'https://api.example.com/.well-known/oauth-protected-resource/mcp',
+      MCP_AUTHORIZATION_SERVER: 'https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_example',
+      MCP_ALLOWED_ORIGINS: JSON.stringify([origin]), MCP_TOOL_TIMEOUT_MS: '20',
+      TOOL_BACKEND_ARN: 'arn:aws:lambda:eu-west-1:123456789012:function:backend',
+    });
+    const { handler } = await import('./index.mjs');
+    const { tools } = JSON.parse(await readFile('tools.json', 'utf8'));
+    const claims = { sub: identity.sub, client_id: identity.clientId, token_use: 'access', aud: resource, scope: 'mcp/read' };
+    const event = body => ({ headers: { origin, 'mcp-protocol-version': '2025-06-18' },
+      requestContext: { http: { method: 'POST' }, authorizer: { jwt: { claims } } }, body: JSON.stringify(body) });
+    const request = args => ({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: tools[0].name, arguments: args } });
+    const forbidden = event(request({ count: 1 })); forbidden.headers.origin = 'https://evil.invalid';
+    assert.equal((await handler(forbidden)).statusCode, 403);
+    assert.equal((await handler(event({ ...request({ count: 1 }), id: null }))).statusCode, 400);
+    assert.equal((await handler(event({ jsonrpc: '2.0', id: 1, result: {} }))).statusCode, 400);
+    assert.equal(JSON.parse((await handler(event(request({ count: 'many' })))).body).result.isError, true);
+    const expired = event(request({ count: 1 })); expired.requestContext.timeEpoch = Date.now() - 1000;
+    assert.equal(JSON.parse((await handler(expired)).body).result.isError, true);
+    assert.equal(calls.length, 0);
+    const preflight = await handler({ requestContext: { http: { method: 'OPTIONS' } },
+      headers: { origin, 'access-control-request-method': 'POST', 'access-control-request-headers': 'Authorization, MCP-Protocol-Version' } });
+    assert.equal(preflight.statusCode, 204);
+    assert.equal(preflight.body, '');
+    assert.equal(preflight.headers['access-control-allow-origin'], origin);
+    assert.equal(calls.length, 0);
+    const result = await handler(event(request({ count: 1 })));
+    assert.equal(result.statusCode, 200);
+    assert.equal(JSON.parse(result.body).result.isError, false);
+    assert.equal(result.headers['access-control-allow-origin'], origin);
+    assert.deepEqual(calls[0].payload, { tool: tools[0].name, arguments: { count: 1 }, identity });
+    assert.equal(calls[0].input.FunctionName, process.env.TOOL_BACKEND_ARN);
+    assert.equal(calls[0].signal instanceof AbortSignal, true);
+    const timeout = await handler(event(request({ count: 2 })));
+    assert.equal(JSON.parse(timeout.body).result.isError, true);
+    assert.match(JSON.parse(timeout.body).result.content[0].text, /timed out/i);
+    assert.equal(calls[1].signal.aborted, true);
+  `], { cwd: extractedPackage });
+
   const updated = await plan('updated.tfplan', '_updated');
   await verifyPackages(updated, '_updated');
   for (let index = 0; index < instances.length; index++) {

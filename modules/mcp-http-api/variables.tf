@@ -44,6 +44,23 @@ variable "logout_urls" {
   default     = []
 }
 
+variable "allowed_origins" {
+  description = "Exact canonical HTTP(S) browser origins allowed by Origin validation and CORS. Empty denies supplied Origin headers; native clients may omit Origin. No wildcards, paths, credentials, or default ports."
+  type        = set(string)
+  default     = []
+  nullable    = false
+
+  validation {
+    condition = alltrue([for origin in var.allowed_origins :
+      can(regex("^https?://([a-z0-9]([a-z0-9.-]*[a-z0-9])?|\\[[0-9a-f:]+\\])(:[1-9][0-9]{0,4})?$", origin)) &&
+      try(tonumber(regex(":([0-9]+)$", origin)[0]) <= 65535, true) &&
+      !(startswith(origin, "https://") && endswith(origin, ":443")) &&
+      !(startswith(origin, "http://") && endswith(origin, ":80"))
+    ])
+    error_message = "allowed_origins must contain exact canonical http:// or https:// origins with an optional port from 1 to 65535. Omit default ports; wildcards, paths, credentials, and opaque origins are not allowed."
+  }
+}
+
 variable "enable_password_auth_for_tests" {
   description = "TEST-ONLY. Adds ALLOW_USER_PASSWORD_AUTH to the MCP client so smoke tests can mint tokens without a browser. Keep false in any real deployment."
   type        = bool
@@ -80,9 +97,15 @@ variable "lambda_memory_mb" {
 }
 
 variable "lambda_timeout_s" {
-  description = "Must exceed the tool backend's worst-case duration plus cold start."
+  description = "Integer from 3 to 31. HTTP integration expires one second earlier; tool waiting expires another second earlier, including elapsed request time and cold start."
   type        = number
   default     = 29
+  nullable    = false
+
+  validation {
+    condition     = var.lambda_timeout_s == floor(var.lambda_timeout_s) && var.lambda_timeout_s >= 3 && var.lambda_timeout_s <= 31
+    error_message = "lambda_timeout_s must be an integer from 3 to 31, leaving a valid HTTP API integration (2–30 seconds) and a one-second response margin."
+  }
 }
 
 variable "log_retention_days" {
@@ -96,10 +119,15 @@ variable "tags" {
 }
 
 locals {
-  full_scope            = "${var.resource_server_identifier}/${var.scope_name}"
-  mcp_url               = "https://${aws_cloudfront_distribution.mcp.domain_name}/mcp"
-  resource_metadata_url = "${aws_apigatewayv2_api.mcp.api_endpoint}/.well-known/oauth-protected-resource/mcp"
-  cognito_issuer        = "https://cognito-idp.${data.aws_region.current.region}.amazonaws.com/${var.user_pool_id}"
+  integration_timeout_ms = (var.lambda_timeout_s - 1) * 1000
+  tool_timeout_ms        = (var.lambda_timeout_s - 2) * 1000
+  cors_methods           = ["GET", "POST", "OPTIONS"]
+  cors_request_headers   = ["authorization", "content-type", "mcp-protocol-version", "accept"]
+  cors_expose_headers    = ["WWW-Authenticate"]
+  full_scope             = "${var.resource_server_identifier}/${var.scope_name}"
+  mcp_url                = "https://${aws_cloudfront_distribution.mcp.domain_name}/mcp"
+  resource_metadata_url  = "${aws_apigatewayv2_api.mcp.api_endpoint}/.well-known/oauth-protected-resource/mcp"
+  cognito_issuer         = "https://cognito-idp.${data.aws_region.current.region}.amazonaws.com/${var.user_pool_id}"
   tools_manifest = jsonencode({
     serverName    = var.server_name
     serverVersion = var.server_version

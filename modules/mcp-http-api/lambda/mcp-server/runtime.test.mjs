@@ -602,3 +602,210 @@ test('HTTP: base64-encoded body is decoded', async () => {
   assert.equal(res.statusCode, 200);
   assert.deepEqual(JSON.parse(res.body), { jsonrpc: '2.0', id: 9, result: {} });
 });
+
+test('HTTP: supplied Origins require an exact allowlist match before tool dispatch', async () => {
+  let calls = 0;
+  const browserCfg = { ...cfg, allowedOrigins: ['https://app.example.com'], invokeTool: async () => { calls++; return {}; } };
+  for (const origin of [
+    'https://untrusted.invalid', 'null', '*', 'https://app.example.com.evil.invalid',
+    'https://app.example.com/', 'https://user@app.example.com', 'https://app.example.com, https://evil.invalid',
+    '', null, 123, ['https://app.example.com'],
+  ]) {
+    const res = await handleHttpEvent(httpEvent(goodClaims, {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'get_my_bookings', arguments: { since: '2026-01-01' } },
+    }, { headers: { 'mcp-protocol-version': '2025-06-18', Origin: origin } }), browserCfg);
+    assert.equal(res.statusCode, 403, origin);
+    assert.equal(calls, 0);
+    assert.equal(res.headers['access-control-allow-origin'], undefined);
+  }
+
+  const trusted = await handleHttpEvent(httpEvent(goodClaims, { jsonrpc: '2.0', id: 2, method: 'ping' }, {
+    headers: { 'mcp-protocol-version': '2025-06-18', oRiGiN: 'https://app.example.com' },
+  }), browserCfg);
+  assert.equal(trusted.statusCode, 200);
+  assert.equal(trusted.headers['access-control-allow-origin'], 'https://app.example.com');
+  assert.match(trusted.headers['access-control-expose-headers'], /www-authenticate/i);
+
+  const disabled = await handleHttpEvent(httpEvent(goodClaims, { jsonrpc: '2.0', id: 3, method: 'ping' }, {
+    headers: { 'mcp-protocol-version': '2025-06-18', Origin: 'https://app.example.com' },
+  }), cfg);
+  assert.equal(disabled.statusCode, 403);
+  const native = await handleHttpEvent(httpEvent(goodClaims, { jsonrpc: '2.0', id: 4, method: 'ping' }), cfg);
+  assert.equal(native.statusCode, 200);
+});
+
+test('HTTP: trusted browser preflight is public and actual authentication challenges expose CORS', async () => {
+  const browserCfg = { ...cfg, allowedOrigins: ['https://app.example.com'] };
+  const res = await handleHttpEvent({
+    requestContext: { http: { method: 'OPTIONS' } },
+    headers: {
+      Origin: 'https://app.example.com',
+      'Access-Control-Request-Method': 'POST',
+      'Access-Control-Request-Headers': 'Authorization, Content-Type, MCP-Protocol-Version',
+    },
+  }, browserCfg);
+  assert.equal(res.statusCode, 204);
+  assert.equal(res.body, '');
+  assert.equal(res.headers['access-control-allow-origin'], 'https://app.example.com');
+  assert.match(res.headers['access-control-allow-methods'], /POST/);
+  assert.match(res.headers['access-control-allow-headers'], /mcp-protocol-version/i);
+
+  const denied = await handleHttpEvent(httpEvent(undefined, { jsonrpc: '2.0', id: 1, method: 'ping' }, {
+    headers: { Origin: 'https://app.example.com', 'mcp-protocol-version': '2025-06-18' },
+  }), browserCfg);
+  assert.equal(denied.statusCode, 401);
+  assert.equal(denied.headers['access-control-allow-origin'], 'https://app.example.com');
+  assert.match(denied.headers['access-control-expose-headers'], /www-authenticate/i);
+  assert.match(denied.headers['www-authenticate'], /resource_metadata/);
+});
+
+test('HTTP: malformed browser preflight and untrusted discovery Origins are denied', async () => {
+  const browserCfg = { ...cfg, allowedOrigins: ['https://app.example.com'] };
+  for (const extra of [
+    { Origin: 'https://evil.invalid' },
+    { 'Access-Control-Request-Method': 'PUT' },
+    { 'Access-Control-Request-Headers': 'Authorization, X-Unapproved' },
+  ]) {
+    const res = await handleHttpEvent({
+      requestContext: { http: { method: 'OPTIONS' } },
+      headers: { Origin: 'https://app.example.com', 'Access-Control-Request-Method': 'POST', ...extra },
+    }, browserCfg);
+    assert.equal(res.statusCode, 403);
+  }
+  const missingOrigin = await handleHttpEvent({
+    requestContext: { http: { method: 'OPTIONS' } },
+    headers: { 'Access-Control-Request-Method': 'POST' },
+  }, browserCfg);
+  assert.equal(missingOrigin.statusCode, 400);
+
+  const metadata = await handleHttpEvent({
+    routeKey: 'GET /.well-known/oauth-protected-resource/mcp',
+    requestContext: { http: { method: 'GET' } },
+    headers: { Origin: 'https://evil.invalid' },
+  }, browserCfg);
+  assert.equal(metadata.statusCode, 403);
+});
+
+test('HTTP: malformed request IDs and envelopes never invoke tools', async () => {
+  let calls = 0;
+  const ctx = { ...cfg, invokeTool: async () => { calls++; return {}; } };
+  for (const id of [null, {}, [], 1.5, true, undefined, Number.MAX_SAFE_INTEGER + 1]) {
+    for (const method of ['ping', 'tools/call']) {
+      const res = await handleHttpEvent(httpEvent(goodClaims, {
+        jsonrpc: '2.0', id, method,
+        ...(method === 'tools/call' ? { params: { name: 'get_my_bookings', arguments: { since: '2026-01-01' } } } : {}),
+      }), ctx);
+      assert.equal(res.statusCode, 400, `${method}: ${JSON.stringify(id)}`);
+      const body = JSON.parse(res.body);
+      assert.equal(body.error.code, -32600);
+      assert.equal(body.id, null);
+      assert.equal(calls, 0);
+    }
+  }
+  for (const msg of [
+    { jsonrpc: '2.0', id: 1, method: 'notifications/initialized' },
+    { jsonrpc: '2.0', id: 1, method: 'ping', result: {} },
+    { jsonrpc: '2.0', id: 1, method: 'ping', params: null },
+    { jsonrpc: '2.0', id: 1, method: 'ping', params: [] },
+    { jsonrpc: '2.0', id: 1, method: 'ping', params: { _meta: null } },
+  ]) {
+    const res = await handleHttpEvent(httpEvent(goodClaims, msg), ctx);
+    assert.equal(res.statusCode, 400);
+    assert.equal(JSON.parse(res.body).error.code, -32600);
+  }
+});
+
+test('HTTP: valid string and safe integer IDs still receive correlated results', async () => {
+  for (const id of ['', 'request-1', 0, -1, Number.MAX_SAFE_INTEGER]) {
+    const res = await handleHttpEvent(httpEvent(goodClaims, { jsonrpc: '2.0', id, method: 'ping' }), cfg);
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(JSON.parse(res.body), { jsonrpc: '2.0', id, result: {} });
+  }
+});
+
+test('initialize requires protocolVersion, capabilities, and complete clientInfo', async () => {
+  const valid = initializeRequest('2025-06-18').params;
+  for (const params of [
+    {}, { ...valid, protocolVersion: undefined }, { ...valid, protocolVersion: 123 },
+    { ...valid, protocolVersion: '' }, { ...valid, capabilities: undefined },
+    { ...valid, capabilities: null }, { ...valid, capabilities: [] },
+    { ...valid, capabilities: { roots: { listChanged: 'yes' } } },
+    { ...valid, capabilities: { sampling: true } },
+    { ...valid, capabilities: { experimental: { feature: true } } },
+    { ...valid, clientInfo: undefined }, { ...valid, clientInfo: {} },
+    { ...valid, clientInfo: { name: 'client' } }, { ...valid, clientInfo: { name: 1, version: '0' } },
+    { ...valid, clientInfo: { name: 'client', version: null } },
+  ]) {
+    const res = await handleHttpEvent(httpEvent(goodClaims, { jsonrpc: '2.0', id: 1, method: 'initialize', params }), cfg);
+    assert.equal(res.statusCode, 200);
+    const body = JSON.parse(res.body);
+    assert.equal(body.error?.code, -32602, JSON.stringify(params));
+    assert.equal(body.id, 1);
+  }
+  const initialized = await handleMessage({
+    ...initializeRequest('2025-06-18'),
+    params: { ...valid, capabilities: { roots: { listChanged: true }, sampling: {}, elicitation: {}, experimental: {}, futureCapability: true } },
+  }, cfg);
+  assert.equal(initialized.result.protocolVersion, '2025-06-18');
+});
+
+test('HTTP: valid cancellation notifications are accepted and malformed parameters are rejected', async () => {
+  const valid = await handleHttpEvent(httpEvent(goodClaims, {
+    jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 'request-1', reason: 'cancelled' },
+  }), cfg);
+  assert.equal(valid.statusCode, 202);
+  assert.equal(valid.body, '');
+  for (const params of [undefined, {}, { requestId: null }, { requestId: 1.5 }, { requestId: 1, reason: 2 }]) {
+    const res = await handleHttpEvent(httpEvent(goodClaims, { jsonrpc: '2.0', method: 'notifications/cancelled', params }), cfg);
+    assert.equal(res.statusCode, 400);
+    assert.equal(JSON.parse(res.body).error.code, -32600);
+  }
+});
+
+test('HTTP: incoming JSON-RPC results and errors receive a transport error status', async () => {
+  let calls = 0;
+  for (const msg of [
+    { jsonrpc: '2.0', id: 1, result: {} },
+    { jsonrpc: '2.0', id: 'response-1', result: null },
+    { jsonrpc: '2.0', id: 1, error: { code: -32601, message: 'unknown method' } },
+    { jsonrpc: '2.0', id: 1, result: {}, error: { code: -32601, message: 'mixed' } },
+  ]) {
+    const res = await handleHttpEvent(httpEvent(goodClaims, msg), {
+      ...cfg, invokeTool: async () => { calls++; return {}; },
+    });
+    assert.equal(res.statusCode, 400);
+    assert.equal(JSON.parse(res.body).error.code, -32600);
+    assert.equal(calls, 0);
+  }
+});
+
+test('HTTP: an expired tool deadline accounts for cold start and never invokes the backend', async () => {
+  let calls = 0;
+  const event = httpEvent(goodClaims, {
+    jsonrpc: '2.0', id: 1, method: 'tools/call',
+    params: { name: 'get_my_bookings', arguments: { since: '2026-01-01' } },
+  });
+  event.requestContext.timeEpoch = Date.now() - 30000;
+  const res = await handleHttpEvent(event, {
+    ...cfg, toolTimeoutMs: 27000, invokeTool: async () => { calls++; return {}; },
+  });
+  assert.equal(calls, 0);
+  assert.equal(JSON.parse(res.body).result.isError, true);
+  assert.match(JSON.parse(res.body).result.content[0].text, /timed out/i);
+});
+
+test('HTTP: a stalled backend is aborted before the gateway deadline', { timeout: 1000 }, async () => {
+  let signal;
+  const res = await handleHttpEvent(httpEvent(goodClaims, {
+    jsonrpc: '2.0', id: 1, method: 'tools/call',
+    params: { name: 'get_my_bookings', arguments: { since: '2026-01-01' } },
+  }), {
+    ...cfg, toolTimeoutMs: 20,
+    invokeTool: async (input, options = {}) => { signal = options.abortSignal; return new Promise(() => {}); },
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(JSON.parse(res.body).result.isError, true);
+  assert.match(JSON.parse(res.body).result.content[0].text, /timed out/i);
+  assert.equal(signal.aborted, true);
+});

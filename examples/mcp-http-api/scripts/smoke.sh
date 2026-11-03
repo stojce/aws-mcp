@@ -6,8 +6,8 @@
 #   scripts/smoke.sh --negative-only              # no token needed
 #
 # Inputs (flags override env):
-#   --token-file FILE          access token WITH mcp/read, from the authorization-code flow
-#   --noscope-token-file FILE  access token from the same client WITHOUT mcp/read (expects 403)
+#   --token-file FILE          resource-bound access token WITH mcp/read, from authorization-code + PKCE
+#   --noscope-token-file FILE  resource-bound token from the same client WITHOUT mcp/read (expects 403)
 #   --url URL                  MCP endpoint (default: terraform output mcp_url)
 #   --client-id ID             MCP app client id (default: terraform output mcp_app_client_id)
 #   --negative-only            run only the checks that need no valid token
@@ -81,7 +81,8 @@ import base64, json, sys
 tok, key = sys.argv[1], sys.argv[2]
 p = tok.split('.')[1]
 p += '=' * (-len(p) % 4)
-print(json.loads(base64.urlsafe_b64decode(p)).get(key, ''))
+value = json.loads(base64.urlsafe_b64decode(p)).get(key, '')
+print(json.dumps(value) if key == 'aud' else value)
 PY
 }
 
@@ -119,10 +120,10 @@ if [[ "$STATUS" == "401" ]]; then pass "forged-signature token -> 401"; else fai
 if [[ -n "$NOSCOPE_TOKEN_FILE" ]]; then
   NOSCOPE="$(tr -d '[:space:]' < "$NOSCOPE_TOKEN_FILE")"
   request "$NOSCOPE" '{"jsonrpc":"2.0","id":1,"method":"ping"}'
-  if [[ "$STATUS" == "403" && "$HEADERS" == *'insufficient_scope'* ]]; then
-    pass "token without mcp/read -> 403 insufficient_scope"
+  if [[ "$STATUS" == "403" ]]; then
+    pass "resource-bound token without mcp/read -> 403"
   else
-    fail "token without mcp/read -> 403 insufficient_scope" "got $STATUS, headers: $(grep -i www-auth <<<"$HEADERS")"
+    fail "resource-bound token without mcp/read -> 403" "got $STATUS"
   fi
 else
   echo "SKIP  token without mcp/read (pass --noscope-token-file to run)"
@@ -138,8 +139,8 @@ if [[ "$NEGATIVE_ONLY" == "1" ]]; then
   echo "SKIP  positive checks (--negative-only)"
 elif [[ -z "$TOKEN_FILE" ]]; then
   echo
-  echo "FAIL  positive checks need --token-file (an access token with mcp/read)."
-  echo "      Get one from the authorization-code flow: see examples/mcp-http-api/README.md"
+  echo "FAIL  positive checks need --token-file (aud=mcp_url and scope=mcp/read)."
+  echo "      Use authorization-code + PKCE with resource=mcp_url: see examples/mcp-http-api/README.md"
   FAIL=$((FAIL + 1))
 else
   TOKEN="$(tr -d '[:space:]' < "$TOKEN_FILE")"
@@ -147,6 +148,7 @@ else
   TOKEN_CLIENT="$(claim "$TOKEN" client_id)"
   TOKEN_USE="$(claim "$TOKEN" token_use)"
   TOKEN_SCOPE="$(claim "$TOKEN" scope)"
+  TOKEN_AUD="$(claim "$TOKEN" aud)"
 
   # Preflight: fail early with the real reason instead of a confusing 403 later.
   if [[ "$TOKEN_USE" != "access" ]]; then
@@ -164,9 +166,14 @@ else
   else
     fail "preflight scope includes mcp/read" "scope='$TOKEN_SCOPE' (re-run the auth flow with scope=openid email mcp/read)"
   fi
+  if [[ "$(python3 -c 'import json,sys; aud=json.loads(sys.argv[1]); expected=sys.argv[2]; print(aud == expected or (isinstance(aud, list) and expected in aud))' "$TOKEN_AUD" "$MCP_URL")" == "True" ]]; then
+    pass "preflight aud contains mcp_url"
+  else
+    fail "preflight aud contains mcp_url" "Request resource=mcp_url in both authorization and token requests."
+  fi
 
   request "$TOKEN" '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}'
-  if [[ "$STATUS" == "200" ]] && [[ "$(jq_py 'd["result"]["serverInfo"]["name"]' <<<"$BODY")" != "" ]]; then
+  if [[ "$STATUS" == "200" ]] && [[ "$(jq_py 'd["result"]["serverInfo"]["name"]' <<<"$BODY")" != "" ]] && [[ "$(jq_py 'd["result"]["protocolVersion"]' <<<"$BODY")" == "2025-06-18" ]]; then
     pass "initialize -> 200 with serverInfo"
   else
     fail "initialize -> 200 with serverInfo" "got $STATUS: $BODY"

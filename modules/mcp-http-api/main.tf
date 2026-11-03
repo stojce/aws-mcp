@@ -27,10 +27,18 @@ resource "aws_cognito_user_pool_client" "mcp" {
   allowed_oauth_flows                  = ["code"]
   allowed_oauth_scopes                 = ["openid", "email", local.full_scope]
   supported_identity_providers         = ["COGNITO"]
+  # Keep a non-empty explicit set: Cognito's default includes the refresh flow
+  # that is incompatible with rotation. API sign-in does not grant MCP scopes.
   explicit_auth_flows = concat(
-    ["ALLOW_REFRESH_TOKEN_AUTH"],
+    ["ALLOW_USER_SRP_AUTH"],
     var.enable_password_auth_for_tests ? ["ALLOW_USER_PASSWORD_AUTH"] : []
   )
+  enable_token_revocation = true
+
+  refresh_token_rotation {
+    feature                    = "ENABLED"
+    retry_grace_period_seconds = 5
+  }
 
   callback_urls = var.callback_urls
   logout_urls   = var.logout_urls
@@ -134,6 +142,8 @@ resource "aws_lambda_function" "mcp" {
       MCP_RESOURCE_METADATA_URL       = local.resource_metadata_url
       MCP_AUTHORIZATION_SERVER        = local.cognito_issuer
       MCP_ALLOW_UNBOUND_ACCESS_TOKENS = tostring(var.allow_unbound_access_tokens)
+      MCP_ALLOWED_ORIGINS             = jsonencode(sort(tolist(var.allowed_origins)))
+      MCP_TOOL_TIMEOUT_MS             = tostring(local.tool_timeout_ms)
       TOOL_BACKEND_ARN                = var.tool_backend_arn
     }
   }
@@ -150,7 +160,20 @@ resource "aws_lambda_function" "mcp" {
 resource "aws_apigatewayv2_api" "mcp" {
   name          = "${var.name}-mcp"
   protocol_type = "HTTP"
-  tags          = var.tags
+
+  dynamic "cors_configuration" {
+    for_each = length(var.allowed_origins) > 0 ? [1] : []
+    content {
+      allow_origins     = sort(tolist(var.allowed_origins))
+      allow_methods     = local.cors_methods
+      allow_headers     = local.cors_request_headers
+      expose_headers    = local.cors_expose_headers
+      allow_credentials = false
+      max_age           = 300
+    }
+  }
+
+  tags = var.tags
 }
 
 resource "aws_apigatewayv2_authorizer" "cognito" {
@@ -175,10 +198,11 @@ resource "aws_apigatewayv2_integration" "mcp" {
   integration_type       = "AWS_PROXY"
   integration_uri        = aws_lambda_function.mcp.invoke_arn
   payload_format_version = "2.0"
-  timeout_milliseconds   = (var.lambda_timeout_s * 1000) - 1000
+  timeout_milliseconds   = local.integration_timeout_ms
 }
 
-# ANY so the Lambda owns method policy (405 for non-POST). Auth still runs first.
+# ANY lets the Lambda own method policy. Browser preflight has separate public
+# routes; all ordinary MCP methods still require JWT and the MCP scope.
 resource "aws_apigatewayv2_route" "mcp" {
   api_id               = aws_apigatewayv2_api.mcp.id
   route_key            = "ANY /mcp"
@@ -194,6 +218,21 @@ resource "aws_apigatewayv2_route" "resource_metadata" {
     "GET /.well-known/oauth-protected-resource/mcp",
     "GET /.well-known/oauth-protected-resource",
   ])
+
+  api_id             = aws_apigatewayv2_api.mcp.id
+  route_key          = each.value
+  target             = "integrations/${aws_apigatewayv2_integration.mcp.id}"
+  authorization_type = "NONE"
+}
+
+# Explicit method routes take priority over ANY /mcp so preflight never needs a
+# bearer token. API Gateway handles CORS; the Lambda enforces the same policy.
+resource "aws_apigatewayv2_route" "preflight" {
+  for_each = length(var.allowed_origins) > 0 ? toset([
+    "OPTIONS /mcp",
+    "OPTIONS /.well-known/oauth-protected-resource/mcp",
+    "OPTIONS /.well-known/oauth-protected-resource",
+  ]) : toset([])
 
   api_id             = aws_apigatewayv2_api.mcp.id
   route_key          = each.value

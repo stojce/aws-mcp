@@ -18,6 +18,14 @@ output "authorization_server_issuer" {
   value = module.mcp.authorization_server_issuer
 }
 
+output "authorization_endpoint" {
+  value = "https://${aws_cognito_user_pool_domain.example.domain}.auth.${var.region}.amazoncognito.com/oauth2/authorize"
+}
+
+output "token_endpoint" {
+  value = "https://${aws_cognito_user_pool_domain.example.domain}.auth.${var.region}.amazoncognito.com/oauth2/token"
+}
+
 output "user_pool_id" {
   value = aws_cognito_user_pool.example.id
 }

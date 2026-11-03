@@ -170,7 +170,8 @@ module "mcp" {
   server_name      = "bookings-mcp"
   server_version   = "1.0.0"
 
-  callback_urls = ["http://localhost:8080/callback"]
+  callback_urls   = var.callback_urls
+  allowed_origins = var.allowed_origins
 
   enable_password_auth_for_tests = var.enable_password_auth_for_tests
 

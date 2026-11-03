@@ -1,7 +1,16 @@
 mock_provider "aws" {
+  mock_resource "aws_iam_role" {
+    defaults = { arn = "arn:aws:iam::123456789012:role/mcp-test" }
+  }
+
+  mock_resource "aws_cloudwatch_log_group" {
+    defaults = { arn = "arn:aws:logs:eu-west-1:123456789012:log-group:/aws/mcp-test" }
+  }
+
   mock_resource "aws_apigatewayv2_api" {
     defaults = {
-      api_endpoint = "https://api.example.com"
+      api_endpoint  = "https://api.example.com"
+      execution_arn = "arn:aws:execute-api:eu-west-1:123456789012:testapi"
     }
   }
 
@@ -16,6 +25,8 @@ mock_provider "aws" {
   }
 }
 
+mock_provider "archive" {}
+
 variables {
   name             = "mcp-oauth-test"
   user_pool_id     = "eu-west-1_example"
@@ -29,7 +40,7 @@ run "resource_bound_discovery" {
   command = apply
 
   assert {
-    condition     = aws_apigatewayv2_authorizer.cognito.jwt_configuration[0].audience == tolist([output.mcp_url])
+    condition     = aws_apigatewayv2_authorizer.cognito.jwt_configuration[0].audience == toset([output.mcp_url])
     error_message = "The edge must require the canonical MCP resource audience by default."
   }
 
@@ -45,8 +56,8 @@ run "resource_bound_discovery" {
 
   assert {
     condition = (
-      aws_cloudfront_response_headers_policy.discovery.custom_headers_config[0].items[0].override &&
-      aws_cloudfront_response_headers_policy.discovery.custom_headers_config[0].items[0].value == "Bearer resource_metadata=\"${output.resource_metadata_url}\", scope=\"${output.required_scope}\"" &&
+      one(aws_cloudfront_response_headers_policy.discovery.custom_headers_config[0].items).override &&
+      one(aws_cloudfront_response_headers_policy.discovery.custom_headers_config[0].items).value == "Bearer resource_metadata=\"${output.resource_metadata_url}\", scope=\"${output.required_scope}\"" &&
       aws_cloudfront_distribution.mcp.default_cache_behavior[0].response_headers_policy_id == aws_cloudfront_response_headers_policy.discovery.id
     )
     error_message = "The advertised endpoint must add discoverable metadata to native authorizer failures."
@@ -70,7 +81,7 @@ run "explicit_legacy_compatibility" {
   }
 
   assert {
-    condition = aws_apigatewayv2_authorizer.cognito.jwt_configuration[0].audience == tolist([
+    condition = aws_apigatewayv2_authorizer.cognito.jwt_configuration[0].audience == toset([
       output.mcp_url, output.mcp_app_client_id,
     ])
     error_message = "Legacy compatibility must add client_id fallback without dropping resource binding."
