@@ -2,9 +2,9 @@
 
 Scope: all current code in `modules/mcp-http-api/`, including Terraform, the Lambda runtime, and tests. `examples/mcp-http-api/` was used as supporting context. This is a working-tree review, not a diff review; the module and example were untracked at review time.
 
-The review identified **0 Standards findings and 13 Spec findings, all P2**. No P1 findings were identified in this snapshot. Finding numbers such as R01 are identifiers, not priority ratings. The highest repair priority was the shared Lambda ZIP path across module instances. **R01, R02, R03, and R04 are now fixed; the other 9 findings remain open.**
+The review identified **0 Standards findings and 13 Spec findings, all P2**. No P1 findings were identified in this snapshot. Finding numbers such as R01 are identifiers, not priority ratings. The highest repair priority was the shared Lambda ZIP path across module instances. **R01, R02, R03, R04, and R05 are now fixed; the other 8 findings remain open.**
 
-No implementation files were changed during the original review. This report was updated after the R01, R02, R03, and R04 repairs on 2026-11-03; see their status and verification below.
+No implementation files were changed during the original review. This report was updated after the R01, R02, R03, R04, and R05 repairs on 2026-11-03; see their status and verification below.
 
 ## Findings index
 
@@ -14,7 +14,7 @@ No implementation files were changed during the original review. This report was
 | R02 | P2 | Module instances share the generated Lambda ZIP | Fixed |
 | R03 | P2 | Resource-server identifiers collide in a shared pool | Fixed |
 | R04 | P2 | Tool arguments are not validated against the full schema | Fixed |
-| R05 | P2 | Protocol headers and negotiated versions are inconsistent | Open |
+| R05 | P2 | Protocol headers and negotiated versions are inconsistent | Fixed |
 | R06 | P2 | Incoming Origin headers are not validated | Open |
 | R07 | P2 | Browser clients cannot complete CORS preflight | Open |
 | R08 | P2 | Request IDs and initialization parameters are not validated | Open |
@@ -108,11 +108,15 @@ Source: [MCP tool security considerations](https://modelcontextprotocol.io/speci
 
 Locations: `modules/mcp-http-api/lambda/mcp-server/runtime.mjs:4`–`5`, `:87`–`91`, and `:139`–`156`.
 
-The adapter ignores `MCP-Protocol-Version`. The advertised transport requires "400 Bad Request" for an invalid or unsupported version. Initialization also advertises support for `2025-03-26`, while every array body is rejected using the later protocol's batch-removal rule.
+At review time, the adapter ignored `MCP-Protocol-Version`. The advertised transport requires "400 Bad Request" for an invalid or unsupported version. Initialization also advertised support for `2025-03-26`, while every array body was rejected using the later protocol's batch-removal rule.
 
 **Observed behavior:** an authenticated ping with `MCP-Protocol-Version: 1900-01-01` returned 200. A batch sent with `2025-03-26` returned 400 despite that version being negotiable.
 
 **Fix:** honor the request's protocol header and the specified fallback for absent headers. Implement transport behavior for every advertised version, or stop advertising versions whose required behavior is missing.
+
+**Status: Fixed (2026-11-03).** The endpoint now supports only `2025-06-18`, matching its single-message transport and batch rejection. Initialization echoes that version when requested and offers it as the supported alternative for other versions, including `2025-03-26`. The HTTP adapter checks protocol headers case-insensitively and returns HTTP 400 for explicitly invalid, unsupported, or ambiguous values before dispatching tools. Headerless initialization can negotiate normally. Later requests without a header use the specification's `2025-03-26` fallback, which is unsupported and returns HTTP 400; no negotiated version is retained between stateless requests. Clients must send `MCP-Protocol-Version: 2025-06-18` on subsequent MCP requests, including notifications and GET. Public OAuth metadata routes do not require the header. The module README documents this behavior, and the example smoke client sends the supported header.
+
+**Regression verification:** the new adapter test first reproduced the reported authenticated ping returning **200 instead of 400** with `MCP-Protocol-Version: 1900-01-01`. The expanded protocol checks also failed on the original version negotiation and missing-header handling. After repair, the combined Node suites passed **47/47 tests** on Node 22.23.4 and Node 26.13.0. Cases cover unsupported and malformed headers, empty and non-string values, comma-joined and conflicting headers, case-insensitive valid headers, initialization negotiation, the post-initialization missing-header fallback, GET status handling, and rejection of batches without invoking the backend. Valid tool calls still preserve verified identity. The real ZIP isolation and saved-plan suite passed on Node 22, both Terraform configurations validated, scoped formatting passed, and the updated smoke script passed its Bash syntax check. No AWS deployment or live protocol smoke test was performed.
 
 Sources: [2025-06-18 protocol version header](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#protocol-version-header); [2025-03-26 transport](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#sending-messages-to-the-server).
 
@@ -262,7 +266,21 @@ The regression suite runs with `terraform -chdir=modules/mcp-http-api test -filt
 | Module Terraform validation | Passed with AWS provider 6.69.1 |
 | Supporting example Terraform validation | Passed with AWS provider 6.71.0 |
 
-Verification used Node 22.23.4, Node 26.13.0, and Terraform 1.17.1. The generated bundle targets Node 22. Runtime dependencies are pinned to Ajv 8.20.0 and ajv-formats 3.0.1, bundled with esbuild 0.28.2. All checks ran locally without AWS deployment or live OAuth login. R05–R13 remain open; their separate discovery suite was not rerun.
+Verification used Node 22.23.4, Node 26.13.0, and Terraform 1.17.1. The generated bundle targets Node 22. Runtime dependencies are pinned to Ajv 8.20.0 and ajv-formats 3.0.1, bundled with esbuild 0.28.2. All checks ran locally without AWS deployment or live OAuth login. At the time of the R04 repair, R05–R13 remained open; R05's subsequent repair is recorded below. The separate discovery suite was not rerun.
+
+### R05 repair verification
+
+| Check | Result |
+|---|---|
+| Combined repository Node unit suites, including protocol regressions | 47/47 passed on Node 22 and Node 26; original adapter returned 200 for the unsupported-header reproduction |
+| Real archive isolation, ZIP contents/hashes, extracted runtime, and saved-plan apply | 1/1 passed on Node 22 |
+| Example smoke script Bash syntax | Passed |
+| Module and supporting example Terraform formatting | Passed |
+| Module Terraform validation | Passed |
+| Supporting example Terraform validation | Passed |
+| Repository-wide Terraform formatting | Flags existing `examples/customer-assistant/variables.tf` and `modules/mcp-gateway/variables.tf`; left unchanged |
+
+Verification used Node 22.23.4, Node 26.13.0, and Terraform 1.17.1. The smoke script was checked with `bash -n examples/mcp-http-api/scripts/smoke.sh`; it was not run against deployed resources. The archive regression uses local data-source plans and saved-plan apply, without AWS deployment. R06–R13 remain open, and the separate discovery suite was not rerun for this repair.
 
 ### Original review verification
 
@@ -291,4 +309,4 @@ During the original review, provider-v5 incompatibility and module ZIP collision
 
 Cognito discovery and the complete public authorization-code/PKCE flow still require live interoperability verification. The current public metadata routes, CloudFront authentication challenge, and resource-audience checks address the older review's absent-discovery and audience-configuration findings in code; this does not prove a positive end-to-end login. The saved-plan ignore rule is also present in the current working tree. Do not treat the older report's P1 findings as unchanged current findings without checking the implementation.
 
-Standards: **0 findings**. Spec: **13 P2 findings identified; R01, R02, R03, and R04 fixed, 9 still open**.
+Standards: **0 findings**. Spec: **13 P2 findings identified; R01, R02, R03, R04, and R05 fixed, 8 still open**.

@@ -62,6 +62,7 @@ request() {
   local raw
   raw="$(curl -sS -o "$tmp" -D "$tmp.h" -w '%{http_code}' -X "$method" "$MCP_URL" \
     -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' \
+    -H 'MCP-Protocol-Version: 2025-06-18' \
     "${auth[@]}" --data-binary "$body" 2>"$tmp.err")" || raw="000"
   STATUS="$raw"
   BODY="$(cat "$tmp")"

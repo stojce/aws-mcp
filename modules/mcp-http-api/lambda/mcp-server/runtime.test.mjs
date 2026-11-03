@@ -31,8 +31,16 @@ const goodClaims = {
 
 const httpEvent = (claims, body, extra = {}) => ({
   requestContext: { http: { method: 'POST' }, authorizer: { jwt: { claims } } },
+  headers: { 'mcp-protocol-version': '2025-06-18' },
   body: typeof body === 'string' ? body : JSON.stringify(body),
   ...extra,
+});
+
+const initializeRequest = protocolVersion => ({
+  jsonrpc: '2.0',
+  id: 1,
+  method: 'initialize',
+  params: { protocolVersion, capabilities: {}, clientInfo: { name: 'test-client', version: '0' } },
 });
 
 test('authorize accepts an MCP-client access token with mcp/read', () => {
@@ -87,18 +95,14 @@ test('authorize rejects missing sub', () => {
 });
 
 test('initialize echoes a supported protocol version and falls back to latest', async () => {
-  const ok = await handleMessage(
-    { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } },
-    cfg
-  );
-  assert.equal(ok.result.protocolVersion, '2025-03-26');
+  const ok = await handleMessage(initializeRequest('2025-06-18'), cfg);
+  assert.equal(ok.result.protocolVersion, '2025-06-18');
   assert.ok(ok.result.capabilities.tools);
 
-  const fallback = await handleMessage(
-    { jsonrpc: '2.0', id: 2, method: 'initialize', params: { protocolVersion: '1999-01-01' } },
-    cfg
-  );
-  assert.equal(fallback.result.protocolVersion, '2025-06-18');
+  for (const requested of ['2025-03-26', '1999-01-01']) {
+    const fallback = await handleMessage(initializeRequest(requested), cfg);
+    assert.equal(fallback.result.protocolVersion, '2025-06-18');
+  }
 });
 
 test('notifications get no response body', async () => {
@@ -457,7 +461,10 @@ test('HTTP: insufficient scope yields 403 with scope challenge', async () => {
 
 test('HTTP: GET is rejected with 405', async () => {
   const res = await handleHttpEvent(
-    { requestContext: { http: { method: 'GET' }, authorizer: { jwt: { claims: goodClaims } } } },
+    {
+      headers: { 'mcp-protocol-version': '2025-06-18' },
+      requestContext: { http: { method: 'GET' }, authorizer: { jwt: { claims: goodClaims } } },
+    },
     cfg
   );
   assert.equal(res.statusCode, 405);
@@ -465,18 +472,96 @@ test('HTTP: GET is rejected with 405', async () => {
 
 test('HTTP: unsupported protocol version is rejected before dispatch', async () => {
   let calls = 0;
-  for (const body of [
-    { jsonrpc: '2.0', id: 1, method: 'ping' },
-    {
-      jsonrpc: '2.0', id: 2, method: 'tools/call',
-      params: { name: 'get_my_bookings', arguments: { since: '2026-01-01' } },
-    },
+  for (const headers of [
+    { 'MCP-Protocol-Version': '1900-01-01' },
+    { 'mcp-protocol-version': '2025-03-26' },
+    { 'McP-pRoToCoL-vErSiOn': 'not-a-version' },
+    { 'mcp-protocol-version': '' },
+    { 'mcp-protocol-version': null },
+    { 'mcp-protocol-version': 20250618 },
+    { 'mcp-protocol-version': ['2025-06-18'] },
+    { 'mcp-protocol-version': '2025-06-18, 2025-06-18' },
+    { 'mcp-protocol-version': '2025-06-18', 'MCP-Protocol-Version': '1900-01-01' },
   ]) {
-    const res = await handleHttpEvent(httpEvent(goodClaims, body, {
-      headers: { 'MCP-Protocol-Version': '1900-01-01' },
-    }), { ...cfg, invokeTool: async () => { calls++; return {}; } });
+    for (const body of [
+      { jsonrpc: '2.0', id: 1, method: 'ping' },
+      initializeRequest('2025-06-18'),
+      {
+        jsonrpc: '2.0', id: 2, method: 'tools/call',
+        params: { name: 'get_my_bookings', arguments: { since: '2026-01-01' } },
+      },
+    ]) {
+      const res = await handleHttpEvent(httpEvent(goodClaims, body, { headers }), {
+        ...cfg, invokeTool: async () => { calls++; return {}; },
+      });
+      assert.equal(res.statusCode, 400, JSON.stringify(headers));
+      assert.equal(JSON.parse(res.body).error, 'unsupported_protocol_version');
+      assert.equal(calls, 0);
+    }
+  }
+});
+
+test('HTTP: supported protocol header is case-insensitive and preserves verified identity', async () => {
+  for (const name of ['mcp-protocol-version', 'MCP-Protocol-Version', 'McP-pRoToCoL-vErSiOn']) {
+    let seen;
+    const args = { since: '2026-01-01', identity: { sub: 'victim' } };
+    const res = await handleHttpEvent(httpEvent(goodClaims, {
+      jsonrpc: '2.0', id: 2, method: 'tools/call',
+      params: { name: 'get_my_bookings', arguments: args },
+    }, { headers: { [name]: '2025-06-18' } }), {
+      ...cfg, invokeTool: async input => { seen = input; return { bookings: [] }; },
+    });
+    assert.equal(res.statusCode, 200);
+    assert.equal(JSON.parse(res.body).result.isError, false);
+    assert.deepEqual(seen, {
+      tool: 'get_my_bookings', arguments: args, identity: { sub: 'user-a', clientId: CLIENT_ID },
+    });
+  }
+});
+
+test('HTTP: initialization without a protocol header negotiates only the implemented version', async () => {
+  for (const requested of ['2025-06-18', '2025-03-26', '1900-01-01']) {
+    const res = await handleHttpEvent(httpEvent(goodClaims, initializeRequest(requested), { headers: {} }), cfg);
+    assert.equal(res.statusCode, 200);
+    assert.equal(JSON.parse(res.body).result.protocolVersion, '2025-06-18');
+  }
+});
+
+test('HTTP: absent protocol headers use the unsupported 2025-03-26 fallback after initialization', async () => {
+  const res = await handleHttpEvent(httpEvent(goodClaims, initializeRequest('2025-06-18'), {
+    headers: undefined,
+  }), cfg);
+  assert.equal(res.statusCode, 200);
+  assert.equal(JSON.parse(res.body).result.protocolVersion, '2025-06-18');
+
+  let calls = 0;
+  for (const headers of [undefined, {}]) {
+    for (const body of [
+      { jsonrpc: '2.0', id: 1, method: 'ping' },
+      { jsonrpc: '2.0', method: 'notifications/initialized' },
+      {
+        jsonrpc: '2.0', id: 2, method: 'tools/call',
+        params: { name: 'get_my_bookings', arguments: { since: '2026-01-01' } },
+      },
+    ]) {
+      const rejected = await handleHttpEvent(httpEvent(goodClaims, body, { headers }), {
+        ...cfg, invokeTool: async () => { calls++; return {}; },
+      });
+      assert.equal(rejected.statusCode, 400);
+      assert.equal(JSON.parse(rejected.body).error, 'unsupported_protocol_version');
+      assert.equal(calls, 0);
+    }
+  }
+});
+
+test('HTTP: invalid or absent protocol headers on GET yield 400', async () => {
+  for (const headers of [undefined, { 'mcp-protocol-version': '1900-01-01' }]) {
+    const res = await handleHttpEvent({
+      headers,
+      requestContext: { http: { method: 'GET' }, authorizer: { jwt: { claims: goodClaims } } },
+    }, cfg);
     assert.equal(res.statusCode, 400);
-    assert.equal(calls, 0);
+    assert.equal(JSON.parse(res.body).error, 'unsupported_protocol_version');
   }
 });
 
@@ -486,9 +571,23 @@ test('HTTP: malformed JSON yields parse error 400', async () => {
   assert.equal(JSON.parse(res.body).error.code, -32700);
 });
 
-test('HTTP: JSON-RPC batch is rejected', async () => {
-  const res = await handleHttpEvent(httpEvent(goodClaims, [{ jsonrpc: '2.0', id: 1, method: 'ping' }]), cfg);
-  assert.equal(res.statusCode, 400);
+test('HTTP: JSON-RPC batches are rejected for the implemented and unsupported versions', async () => {
+  let calls = 0;
+  for (const protocolVersion of ['2025-06-18', '2025-03-26']) {
+    const res = await handleHttpEvent(httpEvent(goodClaims, [{
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'get_my_bookings', arguments: { since: '2026-01-01' } },
+    }], { headers: { 'mcp-protocol-version': protocolVersion } }), {
+      ...cfg, invokeTool: async () => { calls++; return {}; },
+    });
+    assert.equal(res.statusCode, 400);
+    if (protocolVersion === '2025-06-18') {
+      assert.equal(JSON.parse(res.body).error.code, -32600);
+    } else {
+      assert.equal(JSON.parse(res.body).error, 'unsupported_protocol_version');
+    }
+    assert.equal(calls, 0);
+  }
 });
 
 test('HTTP: notification returns 202 with empty body', async () => {

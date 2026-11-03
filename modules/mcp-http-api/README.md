@@ -60,6 +60,21 @@ module "mcp" {
 
 The tool backend must scope every read by `event.identity.sub`.
 
+## Protocol version
+
+The endpoint supports MCP `2025-06-18` only. Initialization echoes that version
+when requested and returns it as the supported alternative for other versions,
+including `2025-03-26`. Initialization may omit `MCP-Protocol-Version`; an
+explicit invalid or unsupported header still receives HTTP 400.
+
+After initialization, send `MCP-Protocol-Version: 2025-06-18` on every MCP request,
+including notifications and GET requests. Header names are case-insensitive.
+The stateless server does not retain the negotiated version between requests.
+When a later request omits the header, the transport specification's fallback is
+`2025-03-26`, which this endpoint does not support, so it returns HTTP 400.
+Empty, malformed, ambiguous, and unsupported version headers also return HTTP 400
+before tool dispatch. Public OAuth metadata routes do not require this header.
+
 ## Tool input validation
 
 Each `input_schema` must be a JSON Schema object with `type: "object"`.

@@ -4,7 +4,8 @@
 import { compileSchema } from './schema-validator.mjs';
 
 export const LATEST_PROTOCOL_VERSION = '2025-06-18';
-export const SUPPORTED_PROTOCOL_VERSIONS = [LATEST_PROTOCOL_VERSION, '2025-03-26'];
+export const SUPPORTED_PROTOCOL_VERSIONS = [LATEST_PROTOCOL_VERSION];
+const DEFAULT_PROTOCOL_VERSION = '2025-03-26';
 
 const ERR = {
   parse: -32700,
@@ -165,18 +166,33 @@ export async function handleHttpEvent(event, cfg) {
     return json(auth.status, { error: auth.error }, { 'www-authenticate': challenge });
   }
 
+  let msg;
+  if (method === 'POST') {
+    const raw = event.isBase64Encoded
+      ? Buffer.from(event.body ?? '', 'base64').toString('utf8')
+      : (event.body ?? '');
+    try {
+      msg = JSON.parse(raw);
+    } catch {
+      return json(400, rpcError(null, ERR.parse, 'parse error'));
+    }
+  }
+
+  const protocolHeaders = Object.entries(event.headers ?? {})
+    .filter(([name]) => name.toLowerCase() === 'mcp-protocol-version');
+  const isInitialization = isObject(msg) && msg.jsonrpc === '2.0'
+    && msg.method === 'initialize' && 'id' in msg;
+  // Initialization negotiates its version before a header is required. There
+  // is no session state here: later headerless requests use the spec's fallback.
+  const protocolVersion = protocolHeaders.length === 0
+    ? (isInitialization ? LATEST_PROTOCOL_VERSION : DEFAULT_PROTOCOL_VERSION)
+    : protocolHeaders[0][1];
+  if (protocolHeaders.length > 1 || !SUPPORTED_PROTOCOL_VERSIONS.includes(protocolVersion)) {
+    return json(400, { error: 'unsupported_protocol_version' });
+  }
+
   if (method !== 'POST') return json(405, { error: 'method_not_allowed' }, { allow: 'POST' });
 
-  const raw = event.isBase64Encoded
-    ? Buffer.from(event.body ?? '', 'base64').toString('utf8')
-    : (event.body ?? '');
-
-  let msg;
-  try {
-    msg = JSON.parse(raw);
-  } catch {
-    return json(400, rpcError(null, ERR.parse, 'parse error'));
-  }
   if (Array.isArray(msg)) {
     // Batch requests were removed in protocol 2025-06-18; not supported.
     return json(400, rpcError(null, ERR.invalidRequest, 'batch requests are not supported'));
