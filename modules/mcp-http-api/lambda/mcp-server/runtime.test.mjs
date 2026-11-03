@@ -463,6 +463,23 @@ test('HTTP: GET is rejected with 405', async () => {
   assert.equal(res.statusCode, 405);
 });
 
+test('HTTP: unsupported protocol version is rejected before dispatch', async () => {
+  let calls = 0;
+  for (const body of [
+    { jsonrpc: '2.0', id: 1, method: 'ping' },
+    {
+      jsonrpc: '2.0', id: 2, method: 'tools/call',
+      params: { name: 'get_my_bookings', arguments: { since: '2026-01-01' } },
+    },
+  ]) {
+    const res = await handleHttpEvent(httpEvent(goodClaims, body, {
+      headers: { 'MCP-Protocol-Version': '1900-01-01' },
+    }), { ...cfg, invokeTool: async () => { calls++; return {}; } });
+    assert.equal(res.statusCode, 400);
+    assert.equal(calls, 0);
+  }
+});
+
 test('HTTP: malformed JSON yields parse error 400', async () => {
   const res = await handleHttpEvent(httpEvent(goodClaims, '{not json'), cfg);
   assert.equal(res.statusCode, 400);
