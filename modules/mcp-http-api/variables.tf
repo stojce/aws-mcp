@@ -68,13 +68,12 @@ variable "enable_password_auth_for_tests" {
 }
 
 variable "resource_server_identifier" {
-  description = "Cognito resource-server identifier, unique within user_pool_id. Each module instance owns its resource server; choose a distinct identifier when sharing a pool."
+  description = "Cognito resource-server identifier, unique within user_pool_id. Defaults to mcp_url so resource-bound custom scopes can be issued. A different identifier requires allow_unbound_access_tokens for legacy compatibility."
   type        = string
-  default     = "mcp"
-  nullable    = false
+  default     = null
 
   validation {
-    condition     = can(regex("^[\\x21\\x23-\\x5B\\x5D-\\x7E]{1,256}$", var.resource_server_identifier))
+    condition     = var.resource_server_identifier == null ? true : can(regex("^[\\x21\\x23-\\x5B\\x5D-\\x7E]{1,256}$", var.resource_server_identifier))
     error_message = "resource_server_identifier must contain 1–256 printable ASCII characters, excluding spaces, double quotes, and backslashes."
   }
 }
@@ -119,15 +118,16 @@ variable "tags" {
 }
 
 locals {
-  integration_timeout_ms = (var.lambda_timeout_s - 1) * 1000
-  tool_timeout_ms        = (var.lambda_timeout_s - 2) * 1000
-  cors_methods           = ["GET", "POST", "OPTIONS"]
-  cors_request_headers   = ["authorization", "content-type", "mcp-protocol-version", "accept"]
-  cors_expose_headers    = ["WWW-Authenticate"]
-  full_scope             = "${var.resource_server_identifier}/${var.scope_name}"
-  mcp_url                = "https://${aws_cloudfront_distribution.mcp.domain_name}/mcp"
-  resource_metadata_url  = "${aws_apigatewayv2_api.mcp.api_endpoint}/.well-known/oauth-protected-resource/mcp"
-  cognito_issuer         = "https://cognito-idp.${data.aws_region.current.region}.amazonaws.com/${var.user_pool_id}"
+  integration_timeout_ms     = (var.lambda_timeout_s - 1) * 1000
+  tool_timeout_ms            = (var.lambda_timeout_s - 2) * 1000
+  cors_methods               = ["GET", "POST", "OPTIONS"]
+  cors_request_headers       = ["authorization", "content-type", "mcp-protocol-version", "accept"]
+  cors_expose_headers        = ["WWW-Authenticate"]
+  resource_server_identifier = var.resource_server_identifier == null ? local.mcp_url : var.resource_server_identifier
+  full_scope                 = "${local.resource_server_identifier}/${var.scope_name}"
+  mcp_url                    = "https://${aws_cloudfront_distribution.mcp.domain_name}/mcp"
+  resource_metadata_url      = "${aws_apigatewayv2_api.mcp.api_endpoint}/.well-known/oauth-protected-resource/mcp"
+  cognito_issuer             = "https://cognito-idp.${data.aws_region.current.region}.amazonaws.com/${var.user_pool_id}"
   tools_manifest = jsonencode({
     serverName    = var.server_name
     serverVersion = var.server_version

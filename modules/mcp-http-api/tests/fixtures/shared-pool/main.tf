@@ -18,13 +18,12 @@ module "mcp" {
   for_each = toset(["bookings", "catalog"])
   source   = "../../.."
 
-  name                       = "mcp-${each.key}"
-  user_pool_id               = local.user_pool_id
-  resource_server_identifier = "mcp-${each.key}"
-  tool_backend_arn           = "arn:aws:lambda:eu-west-1:123456789012:function:${each.key}"
-  server_name                = "${each.key}-mcp"
-  callback_urls              = ["http://localhost:8080/callback"]
-  tools                      = []
+  name             = "mcp-${each.key}"
+  user_pool_id     = local.user_pool_id
+  tool_backend_arn = "arn:aws:lambda:eu-west-1:123456789012:function:${each.key}"
+  server_name      = "${each.key}-mcp"
+  callback_urls    = ["http://localhost:8080/callback"]
+  tools            = []
 }
 
 output "identifiers" {

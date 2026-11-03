@@ -6,10 +6,11 @@
 #   scripts/smoke.sh --negative-only              # no token needed
 #
 # Inputs (flags override env):
-#   --token-file FILE          resource-bound access token WITH mcp/read, from authorization-code + PKCE
-#   --noscope-token-file FILE  resource-bound token from the same client WITHOUT mcp/read (expects 403)
+#   --token-file FILE          resource-bound access token WITH the required scope, from authorization-code + PKCE
+#   --noscope-token-file FILE  resource-bound token from the same client WITHOUT the required scope (expects 403)
 #   --url URL                  MCP endpoint (default: terraform output mcp_url)
 #   --client-id ID             MCP app client id (default: terraform output mcp_app_client_id)
+#   --scope SCOPE              required scope (default: terraform output required_scope)
 #   --negative-only            run only the checks that need no valid token
 #
 # Exit 0 = all checks passed; 1 = at least one failed.
@@ -22,6 +23,7 @@ TOKEN_FILE="${SMOKE_TOKEN_FILE:-}"
 NOSCOPE_TOKEN_FILE="${SMOKE_NOSCOPE_TOKEN_FILE:-}"
 MCP_URL="${SMOKE_MCP_URL:-}"
 CLIENT_ID="${SMOKE_CLIENT_ID:-}"
+REQUIRED_SCOPE="${SMOKE_REQUIRED_SCOPE:-}"
 NEGATIVE_ONLY="${SMOKE_NEGATIVE_ONLY:-0}"
 
 while [[ $# -gt 0 ]]; do
@@ -30,8 +32,9 @@ while [[ $# -gt 0 ]]; do
     --noscope-token-file) NOSCOPE_TOKEN_FILE="$2"; shift 2 ;;
     --url) MCP_URL="$2"; shift 2 ;;
     --client-id) CLIENT_ID="$2"; shift 2 ;;
+    --scope) REQUIRED_SCOPE="$2"; shift 2 ;;
     --negative-only) NEGATIVE_ONLY=1; shift ;;
-    -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -41,6 +44,9 @@ if [[ -z "$MCP_URL" ]]; then
 fi
 if [[ -z "$CLIENT_ID" ]]; then
   CLIENT_ID="$(terraform output -raw mcp_app_client_id 2>/dev/null || true)"
+fi
+if [[ -z "$REQUIRED_SCOPE" ]]; then
+  REQUIRED_SCOPE="$(terraform output -raw required_scope 2>/dev/null || true)"
 fi
 if [[ -z "$MCP_URL" ]]; then
   echo "MCP URL unknown: pass --url or run from an applied example" >&2
@@ -121,27 +127,29 @@ if [[ -n "$NOSCOPE_TOKEN_FILE" ]]; then
   NOSCOPE="$(tr -d '[:space:]' < "$NOSCOPE_TOKEN_FILE")"
   request "$NOSCOPE" '{"jsonrpc":"2.0","id":1,"method":"ping"}'
   if [[ "$STATUS" == "403" ]]; then
-    pass "resource-bound token without mcp/read -> 403"
+    pass "resource-bound token without the required scope -> 403"
   else
-    fail "resource-bound token without mcp/read -> 403" "got $STATUS"
+    fail "resource-bound token without the required scope -> 403" "got $STATUS"
   fi
 else
-  echo "SKIP  token without mcp/read (pass --noscope-token-file to run)"
+  echo "SKIP  token without the required scope (pass --noscope-token-file to run)"
 fi
 
 # Method and body checks need a valid token to get past the edge; they run in
 # the positive section below.
 
-# ── Positive checks (need a token that carries mcp/read) ─────────────────────
+# ── Positive checks (need a token that carries the required scope) ───────────
 
 if [[ "$NEGATIVE_ONLY" == "1" ]]; then
   echo
   echo "SKIP  positive checks (--negative-only)"
 elif [[ -z "$TOKEN_FILE" ]]; then
   echo
-  echo "FAIL  positive checks need --token-file (aud=mcp_url and scope=mcp/read)."
+  echo "FAIL  positive checks need --token-file (aud=mcp_url and the required scope)."
   echo "      Use authorization-code + PKCE with resource=mcp_url: see examples/mcp-http-api/README.md"
   FAIL=$((FAIL + 1))
+elif [[ -z "$REQUIRED_SCOPE" ]]; then
+  fail "required scope is configured" "Pass --scope or run from an applied example."
 else
   TOKEN="$(tr -d '[:space:]' < "$TOKEN_FILE")"
   SUB="$(claim "$TOKEN" sub)"
@@ -161,10 +169,10 @@ else
   else
     pass "preflight client_id is MCP app client"
   fi
-  if [[ " $TOKEN_SCOPE " == *" mcp/read "* ]]; then
-    pass "preflight scope includes mcp/read"
+  if [[ " $TOKEN_SCOPE " == *" $REQUIRED_SCOPE "* ]]; then
+    pass "preflight scope includes the required scope"
   else
-    fail "preflight scope includes mcp/read" "scope='$TOKEN_SCOPE' (re-run the auth flow with scope=openid email mcp/read)"
+    fail "preflight scope includes the required scope" "scope='$TOKEN_SCOPE' (re-run the auth flow with scope=openid email $REQUIRED_SCOPE)"
   fi
   if [[ "$(python3 -c 'import json,sys; aud=json.loads(sys.argv[1]); expected=sys.argv[2]; print(aud == expected or (isinstance(aud, list) and expected in aud))' "$TOKEN_AUD" "$MCP_URL")" == "True" ]]; then
     pass "preflight aud contains mcp_url"

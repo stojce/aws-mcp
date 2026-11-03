@@ -19,7 +19,7 @@ output "mcp_app_client_id" {
 }
 
 output "required_scope" {
-  description = "Scope the token must carry: <resource_server_identifier>/<scope_name>, e.g. mcp/read by default."
+  description = "Scope the token must carry: <resource_server_identifier>/<scope_name>; defaults to <mcp_url>/read."
   value       = local.full_scope
 }
 

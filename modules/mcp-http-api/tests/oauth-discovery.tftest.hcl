@@ -57,7 +57,7 @@ run "resource_bound_discovery" {
   assert {
     condition = (
       one(aws_cloudfront_response_headers_policy.discovery.custom_headers_config[0].items).override &&
-      one(aws_cloudfront_response_headers_policy.discovery.custom_headers_config[0].items).value == "Bearer resource_metadata=\"${output.resource_metadata_url}\", scope=\"${output.required_scope}\"" &&
+      one(aws_cloudfront_response_headers_policy.discovery.custom_headers_config[0].items).value == "Bearer resource_metadata=\"${output.resource_metadata_url}\"" &&
       aws_cloudfront_distribution.mcp.default_cache_behavior[0].response_headers_policy_id == aws_cloudfront_response_headers_policy.discovery.id
     )
     error_message = "The advertised endpoint must add discoverable metadata to native authorizer failures."

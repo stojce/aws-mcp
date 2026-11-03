@@ -3,13 +3,23 @@
 # ──────────────────────────────────────────────────────────────────────────────
 
 resource "aws_cognito_resource_server" "mcp" {
-  identifier   = var.resource_server_identifier
+  identifier   = local.resource_server_identifier
   name         = "${var.name}-mcp"
   user_pool_id = var.user_pool_id
 
   scope {
     scope_name        = var.scope_name
     scope_description = "Read-only MCP access for the signed-in user"
+  }
+
+  lifecycle {
+    # Migrate the client's scopes before deleting a previous resource server.
+    create_before_destroy = true
+
+    precondition {
+      condition     = var.allow_unbound_access_tokens || local.resource_server_identifier == local.mcp_url
+      error_message = "Resource-bound Cognito scopes must belong to mcp_url. Leave resource_server_identifier unset, or enable explicit legacy compatibility for a different identifier."
+    }
   }
 }
 

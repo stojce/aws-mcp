@@ -38,8 +38,10 @@ resource "aws_cloudfront_response_headers_policy" "discovery" {
 
   custom_headers_config {
     items {
-      header   = "WWW-Authenticate"
-      value    = "Bearer resource_metadata=\"${local.resource_metadata_url}\", scope=\"${local.full_scope}\""
+      header = "WWW-Authenticate"
+      # The metadata advertises scopes. Including the URL-derived scope here
+      # would make this policy depend on its own CloudFront distribution.
+      value    = "Bearer resource_metadata=\"${local.resource_metadata_url}\""
       override = true
     }
   }
