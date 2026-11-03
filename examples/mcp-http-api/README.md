@@ -4,6 +4,11 @@ Deploys `modules/mcp-http-api` in a sandbox account with a Cognito pool and doma
 two test users, a DynamoDB bookings table, a tool backend Lambda, and the MCP
 endpoint. The default authentication policy requires resource-bound access tokens.
 
+Requires Terraform 1.9+ and AWS provider 6.13.0+ for the managed-login branding
+resource. The pool uses the Essentials feature plan and managed login version 2,
+with a default branding style assigned to the MCP app client. Classic hosted UI
+version 1 does not issue the resource audience required by the strict MCP policy.
+
 ## Deploy
 
 Set `callback_urls` to the callbacks your MCP client actually uses. The default

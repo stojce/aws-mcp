@@ -3,7 +3,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = ">= 6, < 7"
+      version = ">= 6.13.0, < 7.0.0"
     }
     archive = {
       source  = "hashicorp/archive"
@@ -35,6 +35,7 @@ resource "aws_cognito_user_pool" "example" {
   name                     = "${local.name}-pool"
   auto_verified_attributes = ["email"]
   username_attributes      = ["email"]
+  user_pool_tier           = "ESSENTIALS"
 
   password_policy {
     minimum_length    = 8
@@ -46,8 +47,19 @@ resource "aws_cognito_user_pool" "example" {
 }
 
 resource "aws_cognito_user_pool_domain" "example" {
-  domain       = "${local.name}-${data.aws_caller_identity.current.account_id}"
-  user_pool_id = aws_cognito_user_pool.example.id
+  domain                = "${local.name}-${data.aws_caller_identity.current.account_id}"
+  user_pool_id          = aws_cognito_user_pool.example.id
+  managed_login_version = 2
+}
+
+# Resource-bound OAuth tokens require managed login. API-created domains also
+# need an explicit branding style for each app client before login is available.
+resource "aws_cognito_managed_login_branding" "mcp" {
+  user_pool_id                = aws_cognito_user_pool.example.id
+  client_id                   = module.mcp.mcp_app_client_id
+  use_cognito_provided_values = true
+
+  depends_on = [aws_cognito_user_pool_domain.example]
 }
 
 # Users are created with a fixed, non-sensitive key set. Passwords are NOT

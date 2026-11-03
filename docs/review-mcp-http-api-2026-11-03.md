@@ -48,7 +48,7 @@ At review time, the module permitted `hashicorp/aws >= 5.80, < 7.0.0` but constr
 
 **Fix:** use a region attribute supported by the advertised range, or raise the provider floor and align the example's constraint. Verify the resulting minimum supported version as well as the installed version.
 
-**Status: Fixed (2026-11-03).** The module and supporting example both require `hashicorp/aws >= 6.0.0, < 7.0.0`, excluding the incompatible v5 schema. The module README states this requirement, and the provider constraint records why the v6 floor is needed. Local lockfiles were refreshed to record the matching constraints while retaining their selected provider versions.
+**Status: Fixed (2026-11-03).** The R01 repair raised the module and supporting example to `hashicorp/aws >= 6.0.0, < 7.0.0`, excluding the incompatible v5 schema. The module README states this requirement, and the provider constraint records why the v6 floor is needed. Local lockfiles were refreshed to record the matching constraints while retaining their selected provider versions. The later OAuth follow-up below raises only the example's floor to 6.13.0 for managed-login branding; the module continues to support 6.0.0.
 
 **Compatibility verification:** temporary copies of the complete module and supporting example were pinned to the real AWS provider **6.0.0**, and both passed `terraform validate`. The provider ZIP matched HashiCorp's published SHA-256 checksum. Its schema exposes `aws_region.region`; a targeted plan evaluated the actual issuer expression to `https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_example` and contained no AWS resource changes. The working module and example also passed validation with their installed providers, **6.69.1** and **6.71.0**, respectively. No AWS deployment or live authentication was performed.
 
@@ -332,6 +332,16 @@ Verification used Node 22.23.4, Node 26.13.0, and Terraform 1.17.1. The smoke sc
 Verification used Terraform 1.17.1 and archive provider 2.8.1. Minimum-provider checks used temporary copies of the complete module and example and a local provider mirror; the AWS 6.0.0 ZIP matched HashiCorp's published SHA-256 checksum. Terraform scenarios mock AWS and archive execution. The separate packaging regression uses real archive data sources and saved-plan apply, then runs the extracted Lambda with a local SDK stub to verify Origin/preflight behavior, malformed IDs, response status, schema rejection, expired deadlines, trusted identity, and SDK abort signals.
 
 All checks were local. No AWS deployment, live OAuth login, browser preflight through AWS, refresh-token minting/rotation, or live smoke execution was performed. Aborting an SDK request does not cancel a backend Lambda that is already running. Local regression results establish the repairs in code and configuration; complete resource-bound OAuth and browser interoperability still require verification after deployment.
+
+### Live OAuth follow-up — 2026-11-03
+
+The deployed example was checked in AWS account `062624617241` using only the user-supplied environment credentials. Protected-resource and OIDC discovery passed. Cognito confirmed code flow, refresh-token rotation with a five-second grace period, token revocation, and the registered callback. The domain used classic hosted UI (`ManagedLoginVersion = 1`).
+
+Actual authorization-code/PKCE logins through both an HTTP session and a Chromium browser preserved the requested `resource` through the login URL, validated callback state and ID-token nonce, and issued the MCP scope. The access token had **no `aud` claim**, preventing positive authentication under the strict resource-audience policy. Temporary users were created with outbound messages suppressed, their refresh tokens were revoked, and the users were deleted.
+
+The example now configures an Essentials pool, managed login version 2, and default branding for the MCP app client. The module guide states these authorization-server prerequisites. The example requires AWS provider 6.13.0+ for the native branding resource, including the fix for reading branding in pools with multiple app clients. The complete example validates with both minimum provider 6.13.0 and installed provider 6.71.0; scoped formatting and whitespace checks pass. The saved sandbox plan contains exactly one domain update and one branding creation. Deployment approval and positive OAuth/refresh verification are pending.
+
+Sources: [Cognito resource binding](https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pools-define-resource-servers.html#cognito-user-pools-resource-binding); [AWS provider 6.13.0 release](https://github.com/hashicorp/terraform-provider-aws/releases/tag/v6.13.0).
 
 ### Original review verification
 

@@ -16,9 +16,10 @@ AgentCore Gateway, no interceptor, no shared HMAC secret.
 
 It does **not** create the user pool or the tool backend. Both are inputs.
 
-Requires Terraform 1.9+ and `hashicorp/aws >= 6.0.0, < 7.0.0`, matching the
-supporting example. AWS provider v5 is unsupported: the Cognito issuer uses
-the `aws_region.region` attribute introduced in v6.
+Requires Terraform 1.9+ and `hashicorp/aws >= 6.0.0, < 7.0.0`. The supporting
+example requires AWS provider 6.13.0+ for managed-login branding. AWS provider v5
+is unsupported: the Cognito issuer uses the `aws_region.region` attribute
+introduced in v6.
 
 ## Request path
 
@@ -57,8 +58,12 @@ The tool backend must scope every read by `event.identity.sub`.
 Use the public Cognito app client returned as `mcp_app_client_id`. Pre-register
 the MCP client's exact redirect URI in `callback_urls` and supply that client ID
 to the MCP software. This module does not provide dynamic client registration.
-The existing pool must have a Cognito domain and managed login configured;
-the supporting example creates the domain.
+The existing pool must use Cognito managed login (domain version 2), an Essentials
+or Plus feature plan, and a branding style assigned to this app client. Resource
+binding requires managed login; the classic hosted UI (version 1) issues access
+tokens without `aud` even when `resource` reaches the login request. API-created
+domains do not automatically assign a branding style. The supporting example
+configures the domain and app-client branding.
 
 The initial 401 response advertises `resource_metadata_url` in `WWW-Authenticate`.
 That public metadata identifies `mcp_url` as the protected resource and
