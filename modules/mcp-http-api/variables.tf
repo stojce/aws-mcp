@@ -14,7 +14,7 @@ variable "tool_backend_arn" {
 }
 
 variable "tools" {
-  description = "MCP tools exposed on the endpoint. inputSchema is a JSON-Schema object (use jsonencode in the caller)."
+  description = "MCP tools exposed on the endpoint. input_schema is a JSON Schema with type object (use jsonencode). Supports 2020-12 (default) and draft-07; all schemas compile at Lambda startup."
   type = list(object({
     name         = string
     description  = string

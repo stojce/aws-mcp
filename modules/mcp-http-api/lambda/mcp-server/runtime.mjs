@@ -1,6 +1,8 @@
 // Stateless MCP server runtime (Streamable HTTP, single JSON response per POST).
 // Pure: no AWS SDK imports. The Lambda entrypoint injects the tool invoker.
 
+import { compileSchema } from './schema-validator.mjs';
+
 export const LATEST_PROTOCOL_VERSION = '2025-06-18';
 export const SUPPORTED_PROTOCOL_VERSIONS = [LATEST_PROTOCOL_VERSION, '2025-03-26'];
 
@@ -46,10 +48,36 @@ export function authorize(claims, { clientId, requiredScope, resourceUrl, allowU
   return { ok: true, identity: { sub: claims.sub, clientId: claims.client_id } };
 }
 
-function validateArguments(args, inputSchema) {
+const toolValidators = new WeakMap();
+
+// Called at Lambda startup, before serving initialize or advertising any tools.
+// Direct runtime callers use the same initialization path on their first message.
+export function initializeTools(tools) {
+  if (toolValidators.has(tools)) return toolValidators.get(tools);
+  if (!Array.isArray(tools)) throw new Error('tools must be an array');
+  const validators = new Map();
+  for (const tool of tools) {
+    try {
+      if (!isObject(tool.inputSchema) || tool.inputSchema.type !== 'object') {
+        throw new Error('inputSchema must be an object schema with type "object"');
+      }
+      validators.set(tool, compileSchema(tool.inputSchema));
+    } catch (error) {
+      throw new Error(`Invalid input schema for tool ${tool.name}: ${error.message}`, { cause: error });
+    }
+  }
+  toolValidators.set(tools, validators);
+  return validators;
+}
+
+function validateArguments(args, validate) {
   if (!isObject(args)) return 'arguments must be an object';
-  for (const key of inputSchema?.required ?? []) {
-    if (args[key] === undefined) return `missing required argument: ${key}`;
+  if (!validate(args)) {
+    const error = validate.errors[0];
+    if (error.keyword === 'required' && error.instancePath === '') {
+      return `missing required argument: ${error.params.missingProperty}`;
+    }
+    return `invalid arguments at ${error.instancePath || '/'}: ${error.message}`;
   }
   return null;
 }
@@ -62,8 +90,8 @@ async function handleToolsCall(id, params, ctx) {
   if (!tool) {
     return rpcError(id, ERR.invalidParams, `unknown tool: ${params.name}`);
   }
-  const args = params.arguments ?? {};
-  const invalid = validateArguments(args, tool.inputSchema);
+  const args = params.arguments === undefined ? {} : params.arguments;
+  const invalid = validateArguments(args, initializeTools(ctx.tools).get(tool));
   if (invalid) return rpcResult(id, toolResult(invalid, true));
 
   try {
@@ -77,6 +105,7 @@ async function handleToolsCall(id, params, ctx) {
 
 // Returns a JSON-RPC response object, or null for notifications.
 export async function handleMessage(msg, ctx) {
+  initializeTools(ctx.tools);
   if (!isObject(msg) || msg.jsonrpc !== '2.0' || typeof msg.method !== 'string') {
     return rpcError(msg?.id ?? null, ERR.invalidRequest, 'invalid JSON-RPC request');
   }

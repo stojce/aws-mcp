@@ -2,12 +2,14 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
-import { handleHttpEvent } from './runtime.mjs';
+import { handleHttpEvent, initializeTools } from './runtime.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const { tools, serverName, serverVersion } = JSON.parse(
   await readFile(path.join(here, 'tools.json'), 'utf8')
 );
+
+initializeTools(tools);
 
 const lambda = new LambdaClient({});
 const cfg = {

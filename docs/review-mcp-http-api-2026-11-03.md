@@ -2,9 +2,9 @@
 
 Scope: all current code in `modules/mcp-http-api/`, including Terraform, the Lambda runtime, and tests. `examples/mcp-http-api/` was used as supporting context. This is a working-tree review, not a diff review; the module and example were untracked at review time.
 
-The review identified **0 Standards findings and 13 Spec findings, all P2**. No P1 findings were identified in this snapshot. Finding numbers such as R01 are identifiers, not priority ratings. The highest repair priority was the shared Lambda ZIP path across module instances. **R01, R02, and R03 are now fixed; the other 10 findings remain open.**
+The review identified **0 Standards findings and 13 Spec findings, all P2**. No P1 findings were identified in this snapshot. Finding numbers such as R01 are identifiers, not priority ratings. The highest repair priority was the shared Lambda ZIP path across module instances. **R01, R02, R03, and R04 are now fixed; the other 9 findings remain open.**
 
-No implementation files were changed during the original review. This report was updated after the R01, R02, and R03 repairs on 2026-11-03; see their status and verification below.
+No implementation files were changed during the original review. This report was updated after the R01, R02, R03, and R04 repairs on 2026-11-03; see their status and verification below.
 
 ## Findings index
 
@@ -13,7 +13,7 @@ No implementation files were changed during the original review. This report was
 | R01 | P2 | Advertised AWS provider v5 support is incompatible | Fixed |
 | R02 | P2 | Module instances share the generated Lambda ZIP | Fixed |
 | R03 | P2 | Resource-server identifiers collide in a shared pool | Fixed |
-| R04 | P2 | Tool arguments are not validated against the full schema | Open |
+| R04 | P2 | Tool arguments are not validated against the full schema | Fixed |
 | R05 | P2 | Protocol headers and negotiated versions are inconsistent | Open |
 | R06 | P2 | Incoming Origin headers are not validated | Open |
 | R07 | P2 | Browser clients cannot complete CORS preflight | Open |
@@ -95,6 +95,12 @@ Validation only checks that arguments are an object and required keys are presen
 **Observed behavior:** for an object schema requiring an integer `count`, an enum `status`, and no additional properties, `{ count: "many", status: "invalid", extra: true }` reached the injected backend and returned `isError: false`.
 
 **Fix:** validate against the complete advertised JSON Schema before invoking the backend, and reject malformed schema definitions during configuration or initialization. Verify that invalid arguments never invoke the backend and valid arguments still preserve trusted identity.
+
+**Status: Fixed (2026-11-03).** Ajv now compiles every advertised input schema at Lambda startup and validates tool arguments before backend invocation. JSON Schema 2020-12 is the default; explicit 2020-12 and draft-07 dialects are supported, with standard `ajv-formats` checks. Malformed definitions, unsupported dialects, unknown keywords or formats, unresolved references, and asynchronous schemas fail initialization. References resolve within each tool's own schema namespace; no remote schema loading is enabled. Invalid arguments produce `isError: true` without invoking the backend. Validation preserves supplied arguments without coercion, defaults, or property removal, and verified identity remains separate. Omitted arguments use `{}`; explicit null and other non-object values are rejected.
+
+The validator source, pinned npm lockfile, generated bundle, and dependency license notices are checked in. Terraform packages the bundle and notices alongside the runtime, including them in the artifact hash. Consumers need no npm installation or deployment-time build. The README documents schema support and the regeneration procedure.
+
+**Regression verification:** the new HTTP test first reproduced the review's exact invalid object reaching the backend. After repair, the combined Node suites passed **42/42 tests** on Node 22.23.4 and Node 26.13.0. New cases exercise types, enums, bounds, nested schemas, arrays, string lengths and patterns, formats, references, composition, conditional schemas, dependencies, unevaluated properties, both supported dialects, malformed-schema rejection before initialization/listing, unchanged arguments, reused schema identifiers, and trusted identity. The real ZIP isolation/saved-plan suite also passed with the validator and notices included, checking that changes to either produce new package paths. It runs the extracted runtime in a separate Node process without the development dependencies, verifies invalid arguments cannot invoke the backend, and checks valid arguments and identity reach it unchanged. Rebuilding the bundle and notices on Node 22 produced identical bytes. The module and example passed Terraform validation and formatting. No AWS deployment or live tool invocation was performed.
 
 Source: [MCP tool security considerations](https://modelcontextprotocol.io/specification/2025-06-18/server/tools#security-considerations).
 
@@ -245,6 +251,19 @@ The packaging test uses the real archive provider 2.8.1 and Terraform 1.17.1 wit
 
 The regression suite runs with `terraform -chdir=modules/mcp-http-api test -filter=tests/resource-server.tftest.hcl -no-color` after `terraform init -backend=false`. Verification used Terraform 1.17.1 and Node 26.13.0. The shared-pool fixture uses the real module twice with mocked providers; these checks establish the configured identifiers and scope wiring, without contacting Cognito or deploying resources. No live OAuth login was performed. Keeping the default identifier preserves existing resource-server identity; overriding a deployed identifier requires replacement and new token scopes.
 
+### R04 repair verification
+
+| Check | Result |
+|---|---|
+| Combined repository Node unit suites, including schema regressions | 42/42 passed; original code failed the invalid-arguments backend assertion |
+| Real archive isolation, all source contents/hashes, extracted runtime, and saved-plan apply | 1/1 passed on Node 22, including validator bundle and notices |
+| Validator bundle and license notice rebuild on Node 22 | Identical bytes |
+| Module and supporting example Terraform formatting | Passed |
+| Module Terraform validation | Passed with AWS provider 6.69.1 |
+| Supporting example Terraform validation | Passed with AWS provider 6.71.0 |
+
+Verification used Node 22.23.4, Node 26.13.0, and Terraform 1.17.1. The generated bundle targets Node 22. Runtime dependencies are pinned to Ajv 8.20.0 and ajv-formats 3.0.1, bundled with esbuild 0.28.2. All checks ran locally without AWS deployment or live OAuth login. R05–R13 remain open; their separate discovery suite was not rerun.
+
 ### Original review verification
 
 | Check | Result |
@@ -272,4 +291,4 @@ During the original review, provider-v5 incompatibility and module ZIP collision
 
 Cognito discovery and the complete public authorization-code/PKCE flow still require live interoperability verification. The current public metadata routes, CloudFront authentication challenge, and resource-audience checks address the older review's absent-discovery and audience-configuration findings in code; this does not prove a positive end-to-end login. The saved-plan ignore rule is also present in the current working tree. Do not treat the older report's P1 findings as unchanged current findings without checking the implementation.
 
-Standards: **0 findings**. Spec: **13 P2 findings identified; R01, R02, and R03 fixed, 10 still open**.
+Standards: **0 findings**. Spec: **13 P2 findings identified; R01, R02, R03, and R04 fixed, 9 still open**.

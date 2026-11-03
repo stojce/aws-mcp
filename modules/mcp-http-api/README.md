@@ -27,7 +27,8 @@ the `aws_region.region` attribute introduced in v6.
    and that the token carries `required_scope` (`mcp/read` by default). Failures return 401/403 here.
 3. The MCP Lambda re-checks `token_use=access`, `client_id`, `required_scope`, and
    `sub` (defence in depth; the Lambda never trusts the route alone).
-4. `tools/call` invokes the tool backend with `{ tool, arguments, identity: { sub, clientId } }`.
+4. `tools/call` validates arguments against the advertised input schema, then
+   invokes the tool backend with `{ tool, arguments, identity: { sub, clientId } }`.
    `identity` comes only from the verified token. Client arguments cannot set it.
 
 ## Verified facts (live, eu-west-1)
@@ -58,6 +59,42 @@ module "mcp" {
 ```
 
 The tool backend must scope every read by `event.identity.sub`.
+
+## Tool input validation
+
+Each `input_schema` must be a JSON Schema object with `type: "object"`.
+Schemas without `$schema` use JSON Schema 2020-12. Explicit dialects supported
+are `https://json-schema.org/draft/2020-12/schema` and
+`http://json-schema.org/draft-07/schema#`. Ajv validates the full schema, including
+nested objects and arrays, references, composition, enums, bounds, and additional
+properties. Standard formats supplied by `ajv-formats` are enforced.
+
+All tool schemas compile at Lambda startup, before initialization or tool listing.
+Malformed definitions, unknown keywords or formats, unsupported dialects,
+unresolved references, and asynchronous schemas fail startup. References must
+resolve within the tool's schema; the server does not fetch remote schemas.
+Each tool has its own schema namespace, so tools can reuse the same `$id`.
+
+Invalid arguments return a tool result with `isError: true` and never invoke the
+backend. Validation does not coerce types, insert defaults, or strip extra fields.
+Omitted arguments are validated as `{}`; explicit `null` and other non-object
+arguments are rejected. Valid arguments reach the backend unchanged, alongside
+identity derived from the verified token.
+
+The validator bundle and license notices are checked in and included in the
+Terraform archive. Deployments and runtime tests need no npm installation.
+To update the bundle, edit `validation/schema-validator.mjs` or the pinned
+dependencies in `validation/package.json`, refresh the lockfile if needed, then:
+
+```bash
+cd modules/mcp-http-api/validation
+npm ci --ignore-scripts --no-audit --no-fund
+npm run build
+```
+
+Commit the generated `lambda/mcp-server/schema-validator.mjs` and license notices
+with their source and lockfile. Run the repository Node suites and package
+isolation test after rebuilding.
 
 ## Shared Cognito pools
 
@@ -99,9 +136,9 @@ terraform -chdir=modules/mcp-http-api test -filter=tests/resource-server.tftest.
 
 Each instance writes its generated ZIP under
 `${path.root}/.terraform/mcp-http-api/<name>-<source-hash>.zip`. The hash covers
-`tools.json`, `index.mjs`, and `runtime.mjs`, so different instances and changed
-manifests or code keep separate artifacts. The module source directory is only
-read during packaging.
+`tools.json`, `index.mjs`, `runtime.mjs`, the validator bundle, and its license
+notices, so different instances and changed manifests or code keep separate
+artifacts. The module source directory is only read during packaging.
 
 Keep the generated ZIPs until their saved plans have been applied. When planning
 and applying in separate workspaces, transfer the referenced ZIPs with the plan
@@ -117,8 +154,10 @@ node --test modules/mcp-http-api/tests/package-isolation.test.mjs
 
 The test targets only the real archive data sources in two module instances
 sharing one copied source directory. It checks ZIP contents and hashes,
-an intervening manifest change, saved-plan apply, and changes to both JavaScript
-files. It requires no AWS credentials and deploys no AWS resources.
+an intervening manifest change, saved-plan apply, and changes to every packaged
+source file. It requires no AWS credentials and deploys no AWS resources.
+It also executes the extracted runtime without development dependencies, checking
+argument validation and identity propagation from the packaged code.
 
 ## Limits
 

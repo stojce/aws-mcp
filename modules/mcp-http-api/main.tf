@@ -53,9 +53,11 @@ resource "aws_cognito_user_pool_client" "mcp" {
 
 locals {
   mcp_server_sources = {
-    "tools.json"  = local.tools_manifest
-    "index.mjs"   = file("${path.module}/lambda/mcp-server/index.mjs")
-    "runtime.mjs" = file("${path.module}/lambda/mcp-server/runtime.mjs")
+    "tools.json"                   = local.tools_manifest
+    "index.mjs"                    = file("${path.module}/lambda/mcp-server/index.mjs")
+    "runtime.mjs"                  = file("${path.module}/lambda/mcp-server/runtime.mjs")
+    "schema-validator.mjs"         = file("${path.module}/lambda/mcp-server/schema-validator.mjs")
+    "schema-validator.LICENSE.txt" = file("${path.module}/lambda/mcp-server/schema-validator.LICENSE.txt")
   }
 }
 

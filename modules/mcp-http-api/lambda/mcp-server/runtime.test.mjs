@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { authorize, handleMessage, handleHttpEvent } from './runtime.mjs';
+import { authorize, handleMessage, handleHttpEvent, initializeTools } from './runtime.mjs';
 
 const CLIENT_ID = 'mcp-client-123';
 const RESOURCE_URL = 'https://example.cloudfront.net/mcp';
@@ -148,6 +148,243 @@ test('tools/call with missing required argument is a tool error, not a backend c
   assert.equal(called, false);
   assert.equal(r.result.isError, true);
   assert.match(r.result.content[0].text, /missing required argument: since/);
+});
+
+test('HTTP: tools/call validates the advertised schema before invoking the backend', async () => {
+  const inputSchema = {
+    type: 'object',
+    properties: {
+      count: { type: 'integer', minimum: 1, maximum: 10 },
+      status: { enum: ['active', 'paused'] },
+    },
+    required: ['count', 'status'],
+    additionalProperties: false,
+  };
+  for (const args of [
+    { count: 'many', status: 'invalid', extra: true },
+    { count: '2', status: 'active' },
+    { count: 1.5, status: 'active' },
+    { count: 0, status: 'active' },
+    { count: 11, status: 'active' },
+    { count: 2, status: 'invalid' },
+    { count: 2, status: 'active', extra: true },
+  ]) {
+    let calls = 0;
+    const res = await handleHttpEvent(httpEvent(goodClaims, {
+      jsonrpc: '2.0', id: 10, method: 'tools/call', params: { name: 'checked', arguments: args },
+    }), {
+      ...cfg,
+      tools: [{ name: 'checked', description: 'checked', inputSchema }],
+      invokeTool: async () => { calls++; return {}; },
+    });
+    assert.equal(calls, 0, `Invalid arguments reached the backend: ${JSON.stringify(args)}`);
+    assert.equal(res.statusCode, 200);
+    assert.equal(JSON.parse(res.body).result.isError, true);
+  }
+});
+
+const schemaCases = [
+  {
+    name: 'nested objects, arrays, strings, formats, and local references',
+    inputSchema: {
+      type: 'object',
+      $defs: {
+        contact: {
+          type: 'object',
+          properties: {
+            email: { type: 'string', format: 'email' },
+            code: { type: 'string', minLength: 2, maxLength: 4, pattern: '^[A-Z]+$' },
+          },
+          required: ['email', 'code'],
+          additionalProperties: false,
+        },
+      },
+      properties: {
+        contacts: { type: 'array', minItems: 1, maxItems: 2, uniqueItems: true, items: { $ref: '#/$defs/contact' } },
+        price: { type: 'number', exclusiveMinimum: 0, exclusiveMaximum: 2, multipleOf: 0.25 },
+      },
+      required: ['contacts', 'price'],
+      additionalProperties: false,
+    },
+    valid: { contacts: [{ email: 'user@example.com', code: 'AB' }], price: 0.5 },
+    invalid: [
+      { contacts: [], price: 0.5 },
+      { contacts: [{ email: 'invalid', code: 'AB' }], price: 0.5 },
+      { contacts: [{ email: 'user@example.com', code: 'a' }], price: 0.5 },
+      { contacts: [{ email: 'user@example.com', code: 'ABCDE' }], price: 0.5 },
+      { contacts: [{ email: 'user@example.com' }], price: 0.5 },
+      { contacts: [{ email: 'user@example.com', code: 'AB', extra: true }], price: 0.5 },
+      { contacts: [{ email: 'user@example.com', code: 'AB' }, { email: 'user@example.com', code: 'AB' }], price: 0.5 },
+      { contacts: [{ email: 'user@example.com', code: 'AB' }], price: 0 },
+      { contacts: [{ email: 'user@example.com', code: 'AB' }], price: 2 },
+      { contacts: [{ email: 'user@example.com', code: 'AB' }], price: 0.3 },
+    ],
+  },
+  {
+    name: 'composition, conditional schemas, dependencies, and unevaluated properties',
+    inputSchema: {
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
+      type: 'object',
+      properties: {
+        kind: { enum: ['number', 'string'] },
+        value: { anyOf: [{ type: 'integer' }, { type: 'string', minLength: 2 }] },
+        confirm: { const: true },
+      },
+      required: ['kind', 'value'],
+      allOf: [{ not: { properties: { value: { const: 'forbidden' } }, required: ['value'] } }],
+      oneOf: [
+        { properties: { kind: { const: 'number' } } },
+        { properties: { kind: { const: 'string' } } },
+      ],
+      if: { properties: { kind: { const: 'number' } } },
+      then: { properties: { value: { type: 'integer' } } },
+      else: { properties: { value: { type: 'string' } } },
+      dependentRequired: { confirm: ['reason'] },
+      dependentSchemas: { confirm: { properties: { reason: { type: 'string', minLength: 1 } } } },
+      unevaluatedProperties: false,
+    },
+    valid: { kind: 'number', value: 2, confirm: true, reason: 'ok' },
+    invalid: [
+      { kind: 'number', value: 'wrong' },
+      { kind: 'string', value: 2 },
+      { kind: 'string', value: 'x' },
+      { kind: 'string', value: 'forbidden' },
+      { kind: 'number', value: 2, confirm: true },
+      { kind: 'number', value: 2, confirm: true, reason: 0 },
+      { kind: 'number', value: 2, extra: true },
+    ],
+  },
+  {
+    name: '2020-12 tuple and contains constraints',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tuple: { type: 'array', prefixItems: [{ type: 'string' }, { type: 'integer' }], items: false, minItems: 2 },
+        flags: { type: 'array', contains: { const: true }, minContains: 1, maxContains: 1 },
+      },
+      required: ['tuple', 'flags'],
+    },
+    valid: { tuple: ['a', 2], flags: [false, true] },
+    invalid: [
+      { tuple: [2, 'a'], flags: [true] },
+      { tuple: ['a'], flags: [true] },
+      { tuple: ['a', 2, 3], flags: [true] },
+      { tuple: ['a', 2], flags: [false] },
+      { tuple: ['a', 2], flags: [true, true] },
+    ],
+  },
+  {
+    name: 'draft-07 schemas',
+    inputSchema: {
+      $schema: 'http://json-schema.org/draft-07/schema#',
+      type: 'object',
+      definitions: { pair: { type: 'array', items: [{ type: 'string' }, { type: 'integer' }], additionalItems: false } },
+      properties: { pair: { $ref: '#/definitions/pair' } },
+      required: ['pair'],
+      additionalProperties: false,
+    },
+    valid: { pair: ['a', 2] },
+    invalid: [{ pair: [2, 'a'] }, { pair: ['a', 2, 3] }, { pair: ['a', 2], extra: true }],
+  },
+];
+
+for (const { name, inputSchema, valid, invalid } of schemaCases) {
+  test(`HTTP: validates ${name} and preserves verified identity`, async () => {
+    const seen = [];
+    const toolConfig = {
+      ...cfg,
+      identity: { sub: 'untrusted-config' },
+      tools: [{ name: 'checked', description: 'checked', inputSchema }],
+      invokeTool: async input => { seen.push(input); return { ok: true }; },
+    };
+    for (const args of invalid) {
+      const res = await handleHttpEvent(httpEvent(goodClaims, {
+        jsonrpc: '2.0', id: 11, method: 'tools/call', params: { name: 'checked', arguments: args },
+      }), toolConfig);
+      assert.equal(JSON.parse(res.body).result.isError, true, JSON.stringify(args));
+      assert.equal(seen.length, 0, 'Invalid arguments must never invoke the backend');
+    }
+    const res = await handleHttpEvent(httpEvent(goodClaims, {
+      jsonrpc: '2.0', id: 12, method: 'tools/call', params: { name: 'checked', arguments: valid },
+    }), toolConfig);
+    assert.equal(JSON.parse(res.body).result.isError, false);
+    assert.deepEqual(seen, [{ tool: 'checked', arguments: valid, identity: { sub: 'user-a', clientId: CLIENT_ID } }]);
+    const listed = await handleMessage({ jsonrpc: '2.0', id: 13, method: 'tools/list' }, toolConfig);
+    assert.deepEqual(listed.result.tools[0].inputSchema, inputSchema);
+  });
+}
+
+test('tool schemas fail initialization rather than advertising malformed or unsupported definitions', async () => {
+  for (const inputSchema of [
+    undefined, true, {}, { type: 'array' },
+    { type: 'object', required: 'count' },
+    { type: 'object', required: ['count', 'count'] },
+    { type: 'object', properties: { count: { type: 'nonsense' } } },
+    { type: 'object', properties: { count: { minimum: '1' } } },
+    { type: 'object', properties: { value: { enum: [] } } },
+    { type: 'object', properties: { value: { pattern: '[' } } },
+    { type: 'object', properties: { value: { format: 'unknown-format' } } },
+    { type: 'object', properties: { count: { minimun: 1 } } },
+    { type: 'object', $ref: '#/$defs/missing' },
+    { type: 'object', $ref: 'https://untrusted.invalid/schema' },
+    { type: 'object', $schema: 'https://untrusted.invalid/dialect' },
+    { type: 'object', $async: true },
+  ]) {
+    const tools = [{ name: 'broken', inputSchema }];
+    assert.throws(() => initializeTools(tools), /Invalid input schema for tool broken/);
+    let calls = 0;
+    const toolConfig = { ...cfg, tools, invokeTool: async () => { calls++; } };
+    await assert.rejects(handleMessage({ jsonrpc: '2.0', id: 14, method: 'initialize' }, toolConfig), /Invalid input schema/);
+    await assert.rejects(handleMessage({ jsonrpc: '2.0', id: 15, method: 'tools/list' }, toolConfig), /Invalid input schema/);
+    assert.equal(calls, 0);
+  }
+});
+
+test('validation keeps arguments intact and tool schema identifiers isolated', async () => {
+  const inputSchema = {
+    $id: 'https://example.com/tool-schema',
+    type: 'object',
+    properties: { count: { type: 'integer', default: 2 } },
+  };
+  const tools = [
+    { name: 'first', inputSchema },
+    { name: 'second', inputSchema: { ...inputSchema, properties: { count: { type: 'string' } } } },
+  ];
+  initializeTools(tools);
+  const args = { identity: { sub: 'victim' }, extra: true };
+  let seen;
+  const res = await handleHttpEvent(httpEvent(goodClaims, {
+    jsonrpc: '2.0', id: 16, method: 'tools/call', params: { name: 'first', arguments: args },
+  }), { ...cfg, tools, invokeTool: async input => { seen = input; return {}; } });
+  assert.equal(JSON.parse(res.body).result.isError, false);
+  assert.deepEqual(seen.arguments, args);
+  assert.equal(Object.hasOwn(seen.arguments, 'count'), false, 'Schema defaults must not modify arguments');
+  assert.deepEqual(seen.identity, { sub: 'user-a', clientId: CLIENT_ID });
+  const invalid = await handleHttpEvent(httpEvent(goodClaims, {
+    jsonrpc: '2.0', id: 17, method: 'tools/call', params: { name: 'second', arguments: { count: 2 } },
+  }), { ...cfg, tools, invokeTool: async () => assert.fail('Wrong schema used for second tool') });
+  assert.equal(JSON.parse(invalid.body).result.isError, true);
+});
+
+test('tool arguments must be objects; omitted arguments are validated as an empty object', async () => {
+  const seen = [];
+  const toolConfig = {
+    ...cfg,
+    tools: [{ name: 'empty', inputSchema: { type: 'object', additionalProperties: false } }],
+    invokeTool: async input => { seen.push(input.arguments); return {}; },
+  };
+  for (const args of [null, [], 'text', 2, true]) {
+    const res = await handleHttpEvent(httpEvent(goodClaims, {
+      jsonrpc: '2.0', id: 18, method: 'tools/call', params: { name: 'empty', arguments: args },
+    }), toolConfig);
+    assert.equal(JSON.parse(res.body).result.isError, true);
+    assert.equal(seen.length, 0);
+  }
+  const res = await handleHttpEvent(httpEvent(goodClaims, {
+    jsonrpc: '2.0', id: 19, method: 'tools/call', params: { name: 'empty' },
+  }), toolConfig);
+  assert.equal(JSON.parse(res.body).result.isError, false);
+  assert.deepEqual(seen, [{}]);
 });
 
 test('backend failure returns a generic tool error without leaking internals', async () => {

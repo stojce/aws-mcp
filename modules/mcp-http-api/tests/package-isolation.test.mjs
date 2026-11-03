@@ -11,6 +11,13 @@ import { promisify } from 'node:util';
 const execute = promisify(execFile);
 const moduleDirectory = fileURLToPath(new URL('../', import.meta.url));
 const instances = ['first', 'second'];
+const codeFiles = ['index.mjs', 'runtime.mjs', 'schema-validator.mjs', 'schema-validator.LICENSE.txt'];
+const inputSchema = {
+  type: 'object',
+  properties: { count: { type: 'integer', minimum: 1 } },
+  required: ['count'],
+  additionalProperties: false,
+};
 
 test('module packages remain isolated through intervening plans and saved-plan apply', { timeout: 120000 }, async t => {
   const workspace = await mkdtemp(path.join(tmpdir(), 'mcp-package-isolation-'));
@@ -62,7 +69,7 @@ test('module packages remain isolated through intervening plans and saved-plan a
       tools: [{
         name: 'get_' + instance + '${var.tool_suffix}',
         description: `Tool for ${instance}.`,
-        input_schema: JSON.stringify({ type: 'object', properties: {}, required: [] }),
+        input_schema: JSON.stringify(inputSchema),
       }],
     }])),
   }));
@@ -111,7 +118,7 @@ test('module packages remain isolated through intervening plans and saved-plan a
       assert.equal(createHash('sha256').update(zip).digest('base64'), archive.output_base64sha256,
         'The ZIP bytes must match the hash recorded in the plan.');
       const { stdout: entries } = await execute('unzip', ['-Z1', zipPath]);
-      assert.deepEqual(entries.trim().split('\n').sort(), ['index.mjs', 'runtime.mjs', 'tools.json']);
+      assert.deepEqual(entries.trim().split('\n').sort(), [...codeFiles, 'tools.json'].sort());
       const { stdout: manifest } = await execute('unzip', ['-p', zipPath, 'tools.json']);
       assert.deepEqual(JSON.parse(manifest), {
         serverName: `${instances[index]}-server`,
@@ -119,10 +126,10 @@ test('module packages remain isolated through intervening plans and saved-plan a
         tools: [{
           name: `get_${instances[index]}${toolSuffix}`,
           description: `Tool for ${instances[index]}.`,
-          inputSchema: { type: 'object', properties: {}, required: [] },
+          inputSchema,
         }],
       });
-      for (const filename of ['index.mjs', 'runtime.mjs']) {
+      for (const filename of codeFiles) {
         const { stdout: source } = await execute('unzip', ['-p', zipPath, filename]);
         assert.equal(source, await readFile(path.join(sharedModule, 'lambda/mcp-server', filename), 'utf8'));
       }
@@ -131,6 +138,27 @@ test('module packages remain isolated through intervening plans and saved-plan a
 
   const original = await plan('original.tfplan');
   await verifyPackages(original);
+
+  // Run the extracted runtime away from the validator's development dependencies.
+  const extractedPackage = path.join(workspace, 'extracted-package');
+  await execute('unzip', ['-q', path.resolve(workspace, original[0].output_path), '-d', extractedPackage]);
+  await execute(process.execPath, ['--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import { readFile } from 'node:fs/promises';
+    import { handleMessage, initializeTools } from './runtime.mjs';
+    const { tools } = JSON.parse(await readFile('tools.json', 'utf8'));
+    initializeTools(tools);
+    const seen = [];
+    const identity = { sub: 'verified-user', clientId: 'verified-client' };
+    const ctx = { tools, identity, invokeTool: async input => { seen.push(input); return {}; } };
+    const call = args => handleMessage({ jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: tools[0].name, arguments: args } }, ctx);
+    assert.equal((await call({ count: 'many' })).result.isError, true);
+    assert.equal(seen.length, 0);
+    assert.equal((await call({ count: 1 })).result.isError, false);
+    assert.deepEqual(seen, [{ tool: tools[0].name, arguments: { count: 1 }, identity }]);
+  `], { cwd: extractedPackage });
+
   const updated = await plan('updated.tfplan', '_updated');
   await verifyPackages(updated, '_updated');
   for (let index = 0; index < instances.length; index++) {
@@ -146,7 +174,7 @@ test('module packages remain isolated through intervening plans and saved-plan a
   await verifyPackages(applied);
 
   let previous = original;
-  for (const filename of ['index.mjs', 'runtime.mjs']) {
+  for (const filename of codeFiles) {
     await appendFile(path.join(sharedModule, 'lambda/mcp-server', filename), '\n// Package regression fixture.\n');
     const changedCode = await plan(`${filename}.tfplan`);
     await verifyPackages(changedCode);

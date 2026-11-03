@@ -1,0 +1,13 @@
+{
+  "name": "mcp-http-api-schema-validator",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "esbuild": "0.28.2"
+  }
+}
