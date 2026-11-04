@@ -9,13 +9,13 @@ output "resource_metadata_url" {
 }
 
 output "authorization_server_issuer" {
-  description = "Cognito issuer; its OpenID discovery document advertises the existing pool's OAuth endpoints."
-  value       = local.cognito_issuer
+  description = "Configured OAuth/OIDC issuer, advertised in protected-resource metadata."
+  value       = local.authorization_issuer
 }
 
 output "mcp_app_client_id" {
-  description = "MCP app client id. Tokens must come from this client (client_id claim); the Lambda rejects others."
-  value       = aws_cognito_user_pool_client.mcp.id
+  description = "Dedicated MCP client ID, created in Cognito or supplied for the external server. The Lambda pins the configured client claim to it."
+  value       = local.mcp_client_id
 }
 
 output "required_scope" {
@@ -24,8 +24,18 @@ output "required_scope" {
 }
 
 output "mcp_resource_server_identifier" {
-  description = "Identifier of the Cognito resource server owned by this module instance."
-  value       = aws_cognito_resource_server.mcp.identifier
+  description = "Identifier of the Cognito resource server owned by this module instance; null in external authorization mode."
+  value       = var.external_authorization_server == null ? aws_cognito_resource_server.mcp[0].identifier : null
+}
+
+output "authorization_mode" {
+  description = "cognito or external; use this with the smoke client's --authorization-mode option."
+  value       = local.authorization_mode
+}
+
+output "client_id_claim" {
+  description = "Verified access-token claim used to identify the MCP client."
+  value       = local.client_id_claim
 }
 
 output "mcp_server_function_name" {

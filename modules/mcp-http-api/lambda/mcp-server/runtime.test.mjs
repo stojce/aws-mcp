@@ -94,12 +94,12 @@ test('authorize rejects missing sub', () => {
   assert.equal(r.status, 401);
 });
 
-test('initialize echoes a supported protocol version and falls back to latest', async () => {
+test('legacy initialize selects only the implemented legacy lifecycle', async () => {
   const ok = await handleMessage(initializeRequest('2025-06-18'), cfg);
   assert.equal(ok.result.protocolVersion, '2025-06-18');
   assert.ok(ok.result.capabilities.tools);
 
-  for (const requested of ['2025-03-26', '1999-01-01']) {
+  for (const requested of ['2026-07-28', '2025-03-26', '1999-01-01']) {
     const fallback = await handleMessage(initializeRequest(requested), cfg);
     assert.equal(fallback.result.protocolVersion, '2025-06-18');
   }
@@ -472,16 +472,16 @@ test('HTTP: GET is rejected with 405', async () => {
 
 test('HTTP: unsupported protocol version is rejected before dispatch', async () => {
   let calls = 0;
-  for (const headers of [
-    { 'MCP-Protocol-Version': '1900-01-01' },
-    { 'mcp-protocol-version': '2025-03-26' },
-    { 'McP-pRoToCoL-vErSiOn': 'not-a-version' },
-    { 'mcp-protocol-version': '' },
-    { 'mcp-protocol-version': null },
-    { 'mcp-protocol-version': 20250618 },
-    { 'mcp-protocol-version': ['2025-06-18'] },
-    { 'mcp-protocol-version': '2025-06-18, 2025-06-18' },
-    { 'mcp-protocol-version': '2025-06-18', 'MCP-Protocol-Version': '1900-01-01' },
+  for (const [headers, expectedCode] of [
+    [{ 'MCP-Protocol-Version': '1900-01-01' }, -32022],
+    [{ 'mcp-protocol-version': '2025-03-26' }, -32022],
+    [{ 'McP-pRoToCoL-vErSiOn': 'not-a-version' }, -32022],
+    [{ 'mcp-protocol-version': '' }, -32020],
+    [{ 'mcp-protocol-version': null }, -32020],
+    [{ 'mcp-protocol-version': 20250618 }, -32020],
+    [{ 'mcp-protocol-version': ['2025-06-18'] }, -32020],
+    [{ 'mcp-protocol-version': '2025-06-18, 2025-06-18' }, -32020],
+    [{ 'mcp-protocol-version': '2025-06-18', 'MCP-Protocol-Version': '1900-01-01' }, -32020],
   ]) {
     for (const body of [
       { jsonrpc: '2.0', id: 1, method: 'ping' },
@@ -495,7 +495,7 @@ test('HTTP: unsupported protocol version is rejected before dispatch', async () 
         ...cfg, invokeTool: async () => { calls++; return {}; },
       });
       assert.equal(res.statusCode, 400, JSON.stringify(headers));
-      assert.equal(JSON.parse(res.body).error, 'unsupported_protocol_version');
+      assert.equal(JSON.parse(res.body).error.code, expectedCode);
       assert.equal(calls, 0);
     }
   }
@@ -527,7 +527,7 @@ test('HTTP: initialization without a protocol header negotiates only the impleme
   }
 });
 
-test('HTTP: absent protocol headers use the unsupported 2025-03-26 fallback after initialization', async () => {
+test('HTTP: legacy initialization does not authorize later headerless requests', async () => {
   const res = await handleHttpEvent(httpEvent(goodClaims, initializeRequest('2025-06-18'), {
     headers: undefined,
   }), cfg);
@@ -548,20 +548,20 @@ test('HTTP: absent protocol headers use the unsupported 2025-03-26 fallback afte
         ...cfg, invokeTool: async () => { calls++; return {}; },
       });
       assert.equal(rejected.statusCode, 400);
-      assert.equal(JSON.parse(rejected.body).error, 'unsupported_protocol_version');
+      assert.equal(JSON.parse(rejected.body).error.code, -32020);
       assert.equal(calls, 0);
     }
   }
 });
 
-test('HTTP: invalid or absent protocol headers on GET yield 400', async () => {
+test('HTTP: authenticated GET is unsupported independently of protocol headers', async () => {
   for (const headers of [undefined, { 'mcp-protocol-version': '1900-01-01' }]) {
     const res = await handleHttpEvent({
       headers,
       requestContext: { http: { method: 'GET' }, authorizer: { jwt: { claims: goodClaims } } },
     }, cfg);
-    assert.equal(res.statusCode, 400);
-    assert.equal(JSON.parse(res.body).error, 'unsupported_protocol_version');
+    assert.equal(res.statusCode, 405);
+    assert.equal(res.headers.allow, 'POST');
   }
 });
 
@@ -571,7 +571,7 @@ test('HTTP: malformed JSON yields parse error 400', async () => {
   assert.equal(JSON.parse(res.body).error.code, -32700);
 });
 
-test('HTTP: JSON-RPC batches are rejected for the implemented and unsupported versions', async () => {
+test('HTTP: JSON-RPC batches are rejected before dispatch for every version', async () => {
   let calls = 0;
   for (const protocolVersion of ['2025-06-18', '2025-03-26']) {
     const res = await handleHttpEvent(httpEvent(goodClaims, [{
@@ -581,11 +581,7 @@ test('HTTP: JSON-RPC batches are rejected for the implemented and unsupported ve
       ...cfg, invokeTool: async () => { calls++; return {}; },
     });
     assert.equal(res.statusCode, 400);
-    if (protocolVersion === '2025-06-18') {
-      assert.equal(JSON.parse(res.body).error.code, -32600);
-    } else {
-      assert.equal(JSON.parse(res.body).error, 'unsupported_protocol_version');
-    }
+    assert.equal(JSON.parse(res.body).error.code, -32600);
     assert.equal(calls, 0);
   }
 });

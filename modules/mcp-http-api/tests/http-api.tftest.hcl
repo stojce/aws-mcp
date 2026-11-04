@@ -35,13 +35,13 @@ run "public_client_rotates_refresh_tokens" {
 
   assert {
     condition = (
-      !aws_cognito_user_pool_client.mcp.generate_secret &&
-      aws_cognito_user_pool_client.mcp.enable_token_revocation &&
-      length(aws_cognito_user_pool_client.mcp.refresh_token_rotation) == 1 &&
-      try(aws_cognito_user_pool_client.mcp.refresh_token_rotation[0].feature, "") == "ENABLED" &&
-      try(aws_cognito_user_pool_client.mcp.refresh_token_rotation[0].retry_grace_period_seconds, -1) == 5 &&
-      !contains(aws_cognito_user_pool_client.mcp.explicit_auth_flows, "ALLOW_REFRESH_TOKEN_AUTH") &&
-      !contains(aws_cognito_user_pool_client.mcp.explicit_auth_flows, "ALLOW_USER_PASSWORD_AUTH")
+      !aws_cognito_user_pool_client.mcp[0].generate_secret &&
+      aws_cognito_user_pool_client.mcp[0].enable_token_revocation &&
+      length(aws_cognito_user_pool_client.mcp[0].refresh_token_rotation) == 1 &&
+      try(aws_cognito_user_pool_client.mcp[0].refresh_token_rotation[0].feature, "") == "ENABLED" &&
+      try(aws_cognito_user_pool_client.mcp[0].refresh_token_rotation[0].retry_grace_period_seconds, -1) == 5 &&
+      !contains(aws_cognito_user_pool_client.mcp[0].explicit_auth_flows, "ALLOW_REFRESH_TOKEN_AUTH") &&
+      !contains(aws_cognito_user_pool_client.mcp[0].explicit_auth_flows, "ALLOW_USER_PASSWORD_AUTH")
     )
     error_message = "The public OAuth client must rotate refresh tokens without re-enabling password or legacy refresh authentication."
   }
@@ -54,9 +54,9 @@ run "sandbox_password_auth_keeps_rotation" {
   }
   assert {
     condition = (
-      contains(aws_cognito_user_pool_client.mcp.explicit_auth_flows, "ALLOW_USER_PASSWORD_AUTH") &&
-      !contains(aws_cognito_user_pool_client.mcp.explicit_auth_flows, "ALLOW_REFRESH_TOKEN_AUTH") &&
-      try(aws_cognito_user_pool_client.mcp.refresh_token_rotation[0].feature, "") == "ENABLED"
+      contains(aws_cognito_user_pool_client.mcp[0].explicit_auth_flows, "ALLOW_USER_PASSWORD_AUTH") &&
+      !contains(aws_cognito_user_pool_client.mcp[0].explicit_auth_flows, "ALLOW_REFRESH_TOKEN_AUTH") &&
+      try(aws_cognito_user_pool_client.mcp[0].refresh_token_rotation[0].feature, "") == "ENABLED"
     )
     error_message = "Test password authentication must remain opt-in and compatible with refresh-token rotation."
   }
@@ -87,7 +87,7 @@ run "browser_origins_reach_cors_and_origin_validation" {
     condition = (
       aws_apigatewayv2_api.mcp.cors_configuration[0].allow_origins == var.allowed_origins &&
       aws_apigatewayv2_api.mcp.cors_configuration[0].allow_methods == toset(["GET", "POST", "OPTIONS"]) &&
-      aws_apigatewayv2_api.mcp.cors_configuration[0].allow_headers == toset(["authorization", "content-type", "mcp-protocol-version", "accept"]) &&
+      aws_apigatewayv2_api.mcp.cors_configuration[0].allow_headers == toset(["authorization", "content-type", "mcp-protocol-version", "accept", "mcp-method", "mcp-name"]) &&
       aws_apigatewayv2_api.mcp.cors_configuration[0].expose_headers == toset(["WWW-Authenticate"]) &&
       !aws_apigatewayv2_api.mcp.cors_configuration[0].allow_credentials &&
       aws_lambda_function.mcp.environment[0].variables.MCP_ALLOWED_ORIGINS == jsonencode(sort(tolist(var.allowed_origins)))
@@ -113,9 +113,43 @@ run "browser_origins_reach_cors_and_origin_validation" {
       alltrue([for route in aws_apigatewayv2_route.preflight : route.authorization_type == "NONE" && route.target == "integrations/${aws_apigatewayv2_integration.mcp.id}"]) &&
       aws_apigatewayv2_route.mcp.authorization_type == "JWT" &&
       aws_apigatewayv2_route.mcp.authorization_scopes == toset([output.required_scope]) &&
-      aws_apigatewayv2_authorizer.cognito.jwt_configuration[0].audience == toset([output.mcp_url])
+      aws_apigatewayv2_authorizer.jwt.jwt_configuration[0].audience == toset([output.mcp_url])
     )
     error_message = "Only preflight and metadata may be public; browser support must preserve the MCP JWT scope and resource audience."
+  }
+}
+
+run "annotated_tool_headers_reach_every_cors_layer" {
+  command = apply
+  variables {
+    allowed_origins = ["https://app.example.com"]
+    tools = [{
+      name        = "header_tool"
+      description = "A tool with mirrored parameters."
+      input_schema = jsonencode({
+        type = "object"
+        properties = {
+          count = { type = "integer", "x-mcp-header" = "Count" }
+          options = {
+            type = "object"
+            properties = {
+              region = { type = "string", "x-mcp-header" = "Region" }
+            }
+          }
+        }
+      })
+    }]
+  }
+  assert {
+    condition = (
+      aws_apigatewayv2_api.mcp.cors_configuration[0].allow_headers == toset([
+        "authorization", "content-type", "mcp-protocol-version", "accept",
+        "mcp-method", "mcp-name", "mcp-param-count", "mcp-param-region",
+      ]) &&
+      aws_cloudfront_response_headers_policy.discovery.cors_config[0].access_control_allow_headers[0].items == aws_apigatewayv2_api.mcp.cors_configuration[0].allow_headers &&
+      jsondecode(local.tools_manifest).tools[0].inputSchema.properties.options.properties.region["x-mcp-header"] == "Region"
+    )
+    error_message = "Standard and nested tool-parameter headers must reach API Gateway, CloudFront, and the packaged tool schema."
   }
 }
 

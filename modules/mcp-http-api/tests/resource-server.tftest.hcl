@@ -39,9 +39,9 @@ run "default_identifier_matches_the_bound_resource" {
 
   assert {
     condition = (
-      aws_cognito_resource_server.mcp.identifier == output.mcp_url &&
+      aws_cognito_resource_server.mcp[0].identifier == output.mcp_url &&
       output.required_scope == "${output.mcp_url}/read" &&
-      contains(aws_cognito_user_pool_client.mcp.allowed_oauth_scopes, output.required_scope) &&
+      contains(aws_cognito_user_pool_client.mcp[0].allowed_oauth_scopes, output.required_scope) &&
       aws_apigatewayv2_route.mcp.authorization_scopes == toset([output.required_scope]) &&
       aws_lambda_function.mcp.environment[0].variables.MCP_REQUIRED_SCOPE == output.required_scope
     )
@@ -60,8 +60,8 @@ run "custom_identifier_reaches_every_scope_consumer" {
 
   assert {
     condition = (
-      aws_cognito_resource_server.mcp.identifier == "https://bookings.example.com" &&
-      aws_cognito_resource_server.mcp.user_pool_id == "eu-west-1_shared" &&
+      aws_cognito_resource_server.mcp[0].identifier == "https://bookings.example.com" &&
+      aws_cognito_resource_server.mcp[0].user_pool_id == "eu-west-1_shared" &&
       output.required_scope == "https://bookings.example.com/bookings.read"
     )
     error_message = "The configured identifier must determine the resource server and fully qualified scope."
@@ -69,8 +69,8 @@ run "custom_identifier_reaches_every_scope_consumer" {
 
   assert {
     condition = (
-      contains(aws_cognito_user_pool_client.mcp.allowed_oauth_scopes, output.required_scope) &&
-      !contains(aws_cognito_user_pool_client.mcp.allowed_oauth_scopes, "mcp/bookings.read") &&
+      contains(aws_cognito_user_pool_client.mcp[0].allowed_oauth_scopes, output.required_scope) &&
+      !contains(aws_cognito_user_pool_client.mcp[0].allowed_oauth_scopes, "mcp/bookings.read") &&
       aws_apigatewayv2_route.mcp.authorization_type == "JWT" &&
       aws_apigatewayv2_route.mcp.authorization_scopes == toset([output.required_scope]) &&
       aws_lambda_function.mcp.environment[0].variables.MCP_REQUIRED_SCOPE == output.required_scope

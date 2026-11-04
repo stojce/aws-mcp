@@ -40,7 +40,7 @@ run "resource_bound_discovery" {
   command = apply
 
   assert {
-    condition     = aws_apigatewayv2_authorizer.cognito.jwt_configuration[0].audience == toset([output.mcp_url])
+    condition     = aws_apigatewayv2_authorizer.jwt.jwt_configuration[0].audience == toset([output.mcp_url])
     error_message = "The edge must require the canonical MCP resource audience by default."
   }
 
@@ -81,7 +81,7 @@ run "explicit_legacy_compatibility" {
   }
 
   assert {
-    condition = aws_apigatewayv2_authorizer.cognito.jwt_configuration[0].audience == toset([
+    condition = aws_apigatewayv2_authorizer.jwt.jwt_configuration[0].audience == toset([
       output.mcp_url, output.mcp_app_client_id,
     ])
     error_message = "Legacy compatibility must add client_id fallback without dropping resource binding."

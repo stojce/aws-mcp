@@ -14,7 +14,7 @@ const instances = ['first', 'second'];
 const codeFiles = ['index.mjs', 'runtime.mjs', 'schema-validator.mjs', 'schema-validator.LICENSE.txt'];
 const inputSchema = {
   type: 'object',
-  properties: { count: { type: 'integer', minimum: 1 } },
+  properties: { count: { type: 'integer', minimum: 1, 'x-mcp-header': 'Count' } },
   required: ['count'],
   additionalProperties: false,
 };
@@ -229,6 +229,49 @@ test('module packages remain isolated through intervening plans and saved-plan a
     assert.equal(JSON.parse(timeout.body).result.isError, true);
     assert.match(JSON.parse(timeout.body).result.content[0].text, /timed out/i);
     assert.equal(calls[1].signal.aborted, true);
+
+    const metadata = {
+      'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+      'io.modelcontextprotocol/clientCapabilities': {},
+    };
+    const modernEvent = (method, params = {}) => ({
+      headers: {
+        origin, 'mcp-protocol-version': '2026-07-28', 'mcp-method': method,
+        ...(method === 'tools/call' ? {
+          'mcp-name': params.name, 'mcp-param-count': String(params.arguments.count),
+        } : {}),
+      },
+      requestContext: { http: { method: 'POST' }, authorizer: { jwt: { claims } } },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params: { _meta: metadata, ...params } }),
+    });
+    const discovery = await handler(modernEvent('server/discover'));
+    assert.equal(discovery.statusCode, 200);
+    const discovered = JSON.parse(discovery.body).result;
+    assert.deepEqual(discovered.supportedVersions, ['2026-07-28', '2025-06-18']);
+    assert.equal(discovered.resultType, 'complete');
+    assert.equal(discovered.ttlMs, 0);
+    assert.equal(discovered.cacheScope, 'private');
+    assert.equal(discovered._meta['io.modelcontextprotocol/serverInfo'].name, 'first-server');
+    const modernCall = modernEvent('tools/call', { name: tools[0].name, arguments: { count: 1 } });
+    modernCall.headers['mcp-param-count'] = '2';
+    const mismatch = await handler(modernCall);
+    assert.equal(mismatch.statusCode, 400);
+    assert.equal(JSON.parse(mismatch.body).error.code, -32020);
+    assert.equal(calls.length, 2);
+    modernCall.headers['mcp-param-count'] = '1';
+    const modernResult = await handler(modernCall);
+    assert.equal(modernResult.statusCode, 200);
+    assert.equal(JSON.parse(modernResult.body).result.resultType, 'complete');
+    assert.deepEqual(JSON.parse(modernResult.body).result.structuredContent, { owner: identity.sub });
+    assert.deepEqual(calls[2].payload, { tool: tools[0].name, arguments: { count: 1 }, identity });
+    const modernPreflight = await handler({
+      requestContext: { http: { method: 'OPTIONS' } },
+      headers: {
+        origin, 'access-control-request-method': 'POST',
+        'access-control-request-headers': 'MCP-Protocol-Version, Mcp-Method, Mcp-Name, Mcp-Param-Count',
+      },
+    });
+    assert.equal(modernPreflight.statusCode, 204);
   `], { cwd: extractedPackage });
 
   const updated = await plan('updated.tfplan', '_updated');

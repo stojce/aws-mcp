@@ -3,6 +3,8 @@
 # ──────────────────────────────────────────────────────────────────────────────
 
 resource "aws_cognito_resource_server" "mcp" {
+  count = var.external_authorization_server == null ? 1 : 0
+
   identifier   = local.resource_server_identifier
   name         = "${var.name}-mcp"
   user_pool_id = var.user_pool_id
@@ -24,6 +26,8 @@ resource "aws_cognito_resource_server" "mcp" {
 }
 
 resource "aws_cognito_user_pool_client" "mcp" {
+  count = var.external_authorization_server == null ? 1 : 0
+
   name         = "${var.name}-mcp-client"
   user_pool_id = var.user_pool_id
 
@@ -146,11 +150,14 @@ resource "aws_lambda_function" "mcp" {
 
   environment {
     variables = {
-      MCP_CLIENT_ID                   = aws_cognito_user_pool_client.mcp.id
+      MCP_CLIENT_ID                   = local.mcp_client_id
       MCP_REQUIRED_SCOPE              = local.full_scope
       MCP_RESOURCE_URL                = local.mcp_url
       MCP_RESOURCE_METADATA_URL       = local.resource_metadata_url
-      MCP_AUTHORIZATION_SERVER        = local.cognito_issuer
+      MCP_AUTHORIZATION_SERVER        = local.authorization_issuer
+      MCP_AUTHORIZATION_MODE          = local.authorization_mode
+      MCP_CLIENT_ID_CLAIM             = local.client_id_claim
+      MCP_ACCESS_TOKEN_CLAIM          = jsonencode(local.access_token_claim)
       MCP_ALLOW_UNBOUND_ACCESS_TOKENS = tostring(var.allow_unbound_access_tokens)
       MCP_ALLOWED_ORIGINS             = jsonencode(sort(tolist(var.allowed_origins)))
       MCP_TOOL_TIMEOUT_MS             = tostring(local.tool_timeout_ms)
@@ -186,19 +193,19 @@ resource "aws_apigatewayv2_api" "mcp" {
   tags = var.tags
 }
 
-resource "aws_apigatewayv2_authorizer" "cognito" {
+resource "aws_apigatewayv2_authorizer" "jwt" {
   api_id           = aws_apigatewayv2_api.mcp.id
-  name             = "cognito-mcp-client"
+  name             = var.external_authorization_server == null ? "cognito-mcp-client" : "external-mcp-client"
   authorizer_type  = "JWT"
   identity_sources = ["$request.header.Authorization"]
 
   jwt_configuration {
-    issuer = local.cognito_issuer
+    issuer = local.authorization_issuer
     # Cognito resource indicators put the canonical MCP URI in aud. API Gateway
     # checks client_id only when aud is absent; the runtime always pins client_id.
     audience = concat(
       [local.mcp_url],
-      var.allow_unbound_access_tokens ? [aws_cognito_user_pool_client.mcp.id] : []
+      var.allow_unbound_access_tokens ? [local.mcp_client_id] : []
     )
   }
 }
@@ -218,7 +225,7 @@ resource "aws_apigatewayv2_route" "mcp" {
   route_key            = "ANY /mcp"
   target               = "integrations/${aws_apigatewayv2_integration.mcp.id}"
   authorization_type   = "JWT"
-  authorizer_id        = aws_apigatewayv2_authorizer.cognito.id
+  authorizer_id        = aws_apigatewayv2_authorizer.jwt.id
   authorization_scopes = [local.full_scope]
 }
 

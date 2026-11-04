@@ -21,6 +21,9 @@ export function compileSchema(schema) {
     useDefaults: false,
     removeAdditional: false,
   });
+  // MCP 2026-07-28 transport annotation; the runtime validates its placement
+  // and header-name constraints separately from JSON Schema validation.
+  validator.addKeyword({ keyword: 'x-mcp-header', schemaType: 'string', valid: true });
   addFormats(validator);
   const validate = validator.compile(schema);
   // Tool validation must finish synchronously before the backend is invoked.

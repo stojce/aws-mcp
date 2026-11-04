@@ -4,8 +4,45 @@ variable "name" {
 }
 
 variable "user_pool_id" {
-  description = "Existing Cognito User Pool id. The module adds a resource server and an MCP app client to it; it never creates the pool."
+  description = "Existing Cognito User Pool id. Required for Cognito mode; omit when external_authorization_server is configured."
   type        = string
+  default     = null
+
+  validation {
+    condition = var.external_authorization_server != null ? var.user_pool_id == null : (
+      var.user_pool_id == null ? false : trimspace(var.user_pool_id) != ""
+    )
+    error_message = "Provide user_pool_id for Cognito, or configure external_authorization_server and omit user_pool_id."
+  }
+}
+
+variable "external_authorization_server" {
+  description = "Existing OAuth/OIDC JWT authorization server and public MCP client. No Cognito resources are created in this mode. Access tokens must have aud=mcp_url, the required scope, a user sub, and the configured client claim."
+  type = object({
+    issuer          = string
+    client_id       = string
+    required_scope  = string
+    client_id_claim = optional(string, "client_id")
+    access_token_claim = optional(object({
+      name  = string
+      value = string
+    }))
+  })
+  default = null
+
+  validation {
+    condition = var.external_authorization_server == null ? true : (
+      can(regex("^https://[^/?#@\\s]+(/[^?#\\s]*)?$", var.external_authorization_server.issuer)) &&
+      try(trimspace(var.external_authorization_server.client_id) != "", false) &&
+      try(trimspace(var.external_authorization_server.client_id_claim) != "", false) &&
+      can(regex("^[\\x21\\x23-\\x5B\\x5D-\\x7E]+$", var.external_authorization_server.required_scope)) &&
+      (var.external_authorization_server.access_token_claim == null ? true : (
+        try(trimspace(var.external_authorization_server.access_token_claim.name) != "", false) &&
+        try(trimspace(var.external_authorization_server.access_token_claim.value) != "", false)
+      ))
+    )
+    error_message = "The external server needs an HTTPS issuer without credentials, query, or fragment, a nonempty client ID and claim name, one valid OAuth scope, and nonempty access-token marker fields when configured."
+  }
 }
 
 variable "tool_backend_arn" {
@@ -14,7 +51,7 @@ variable "tool_backend_arn" {
 }
 
 variable "tools" {
-  description = "MCP tools exposed on the endpoint. input_schema is a JSON Schema with type object (use jsonencode). Supports 2020-12 (default) and draft-07; all schemas compile at Lambda startup."
+  description = "MCP tools exposed on the endpoint. input_schema is a JSON Schema with type object (use jsonencode). Supports 2020-12 (default), draft-07, and x-mcp-header annotations on primitive properties; all schemas compile at Lambda startup."
   type = list(object({
     name         = string
     description  = string
@@ -23,19 +60,26 @@ variable "tools" {
 }
 
 variable "server_name" {
-  description = "MCP serverInfo.name returned on initialize."
+  description = "MCP implementation name returned in result metadata and legacy initialize."
   type        = string
 }
 
 variable "server_version" {
-  description = "MCP serverInfo.version returned on initialize."
+  description = "MCP implementation version returned in result metadata and legacy initialize."
   type        = string
   default     = "1.0.0"
 }
 
 variable "callback_urls" {
-  description = "Authorization-code callback URLs for the MCP app client."
+  description = "Authorization-code callback URLs for the Cognito MCP app client. External clients are registered with their authorization server separately."
   type        = list(string)
+  default     = []
+  nullable    = false
+
+  validation {
+    condition     = var.external_authorization_server != null || length(var.callback_urls) > 0
+    error_message = "Cognito mode requires at least one registered callback URL."
+  }
 }
 
 variable "logout_urls" {
@@ -88,6 +132,11 @@ variable "allow_unbound_access_tokens" {
   description = "Legacy compatibility only. Accept MCP-client access tokens without an aud claim. Default requires tokens bound to mcp_url with OAuth resource indicators."
   type        = bool
   default     = false
+
+  validation {
+    condition     = var.external_authorization_server == null || !var.allow_unbound_access_tokens
+    error_message = "External authorization servers must issue access tokens bound to mcp_url; legacy unbound-token compatibility is Cognito-only."
+  }
 }
 
 variable "lambda_memory_mb" {
@@ -118,16 +167,29 @@ variable "tags" {
 }
 
 locals {
-  integration_timeout_ms     = (var.lambda_timeout_s - 1) * 1000
-  tool_timeout_ms            = (var.lambda_timeout_s - 2) * 1000
-  cors_methods               = ["GET", "POST", "OPTIONS"]
-  cors_request_headers       = ["authorization", "content-type", "mcp-protocol-version", "accept"]
+  integration_timeout_ms = (var.lambda_timeout_s - 1) * 1000
+  tool_timeout_ms        = (var.lambda_timeout_s - 2) * 1000
+  cors_methods           = ["GET", "POST", "OPTIONS"]
+  # Canonical JSON exposes annotation names without depending on schema layout.
+  # The Lambda validates their token syntax, uniqueness, and property paths.
+  tool_param_headers = distinct(flatten([for tool in var.tools : [
+    for annotation in regexall("\"x-mcp-header\":\"([!#$%&'*+.^_\\x60|~0-9A-Za-z-]+)\"", jsonencode(jsondecode(tool.input_schema))) :
+    "mcp-param-${lower(annotation[0])}"
+  ]]))
+  cors_request_headers       = concat(["authorization", "content-type", "mcp-protocol-version", "accept", "mcp-method", "mcp-name"], local.tool_param_headers)
   cors_expose_headers        = ["WWW-Authenticate"]
   resource_server_identifier = var.resource_server_identifier == null ? local.mcp_url : var.resource_server_identifier
-  full_scope                 = "${local.resource_server_identifier}/${var.scope_name}"
+  full_scope                 = var.external_authorization_server == null ? "${local.resource_server_identifier}/${var.scope_name}" : var.external_authorization_server.required_scope
   mcp_url                    = "https://${aws_cloudfront_distribution.mcp.domain_name}/mcp"
   resource_metadata_url      = "${aws_apigatewayv2_api.mcp.api_endpoint}/.well-known/oauth-protected-resource/mcp"
-  cognito_issuer             = "https://cognito-idp.${data.aws_region.current.region}.amazonaws.com/${var.user_pool_id}"
+  cognito_issuer             = var.user_pool_id == null ? null : "https://cognito-idp.${data.aws_region.current.region}.amazonaws.com/${var.user_pool_id}"
+  authorization_issuer       = var.external_authorization_server == null ? local.cognito_issuer : var.external_authorization_server.issuer
+  authorization_mode         = var.external_authorization_server == null ? "cognito" : "external"
+  mcp_client_id              = var.external_authorization_server == null ? aws_cognito_user_pool_client.mcp[0].id : var.external_authorization_server.client_id
+  client_id_claim            = var.external_authorization_server == null ? "client_id" : var.external_authorization_server.client_id_claim
+  access_token_claim = var.external_authorization_server == null ? {
+    name = "token_use", value = "access"
+  } : var.external_authorization_server.access_token_claim
   tools_manifest = jsonencode({
     serverName    = var.server_name
     serverVersion = var.server_version
