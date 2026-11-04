@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sign in · Bookings MCP</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script type="module" src="/app.mjs"></script>
+  </head>
+  <body>
+    <header class="site-header">
+      <a href="/" class="wordmark" aria-label="Bookings MCP home">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 19V5l8 8 8-8v14M8 19v-6l4 4 4-4v6" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+        Bookings MCP
+      </a>
+      <span class="muted">Cognito sandbox</span>
+    </header>
+    <main>
+      <div class="title-row">
+        <h1>Sign in to Bookings MCP</h1>
+        <p>Connect your sandbox account to MCP Inspector.</p>
+      </div>
+      <div class="workspace panel">
+        <section class="login-panel" aria-labelledby="login-heading">
+          <h2 id="login-heading">Your Cognito account</h2>
+          <p id="login-description">Cognito will ask for your email and password, then return you to the client.</p>
+          <div id="status" role="status" aria-live="polite">Loading sign-in configuration…</div>
+          <a class="button primary" id="sign-in" href="#" aria-disabled="true">Continue to Cognito</a>
+          <div id="token-actions" hidden>
+            <p>Your access token is ready for Inspector’s bearer token field.</p>
+            <button class="button primary" id="copy-token" type="button">Copy access token</button>
+            <div class="secondary-actions">
+              <button class="button secondary" id="refresh-token" type="button">Refresh session</button>
+              <button class="text-button" id="clear-token" type="button">Clear token</button>
+            </div>
+            <details>
+              <summary>View access token</summary>
+              <label class="visually-hidden" for="access-token">Access token</label>
+              <textarea id="access-token" readonly spellcheck="false" rows="5"></textarea>
+            </details>
+          </div>
+          <p class="session-note">Tokens stay in this page’s memory. Reloading clears them.</p>
+          <noscript>Enable JavaScript for standalone sign-in. Inspector requests can continue with the Cognito link.</noscript>
+        </section>
+        <section class="settings-panel" aria-labelledby="settings-heading">
+          <h2 id="settings-heading">MCP Inspector settings</h2>
+          <p>Use Streamable HTTP and the public Cognito client below.</p>
+          <div class="field"><label for="mcp-url">MCP server URL</label><input id="mcp-url" readonly></div>
+          <div class="field"><label for="client-id">Client ID</label><input id="client-id" readonly></div>
+          <div class="field"><label for="scope">Scopes</label><input id="scope" readonly></div>
+          <details id="endpoint-settings">
+            <summary>OAuth URL overrides</summary>
+            <div class="field"><label for="authorization-url">Authorization URL override</label><input id="authorization-url" readonly></div>
+            <div class="field"><label for="token-url">Token URL override</label><input id="token-url" readonly></div>
+            <p class="muted">Client secret is empty. Inspector creates the PKCE challenge and owns its callback.</p>
+          </details>
+          <a class="button secondary" href="/inspector-config.json" download>Download Inspector config</a>
+        </section>
+      </div>
+      <p class="footer-note">For this example’s test users. The MCP server checks Cognito identity and booking ownership on every request.</p>
+    </main>
+  </body>
+</html>

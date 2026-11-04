@@ -13,17 +13,19 @@ required scope is `<MCP_URL>/read`. Use the `required_scope` Terraform output.
 
 ## Deploy
 
-Set `callback_urls` to the callbacks your MCP client actually uses. The default
-is `http://localhost:8080/callback`; a client using that URL must listen there
-before login. For a browser application, also configure its exact origin:
+The defaults register the local login page at `http://localhost:8080/callback`
+and MCP Inspector's callbacks at `http://localhost:6274/oauth/callback` and
+`http://localhost:6274/oauth/callback/debug`, including the Inspector variants
+using `127.0.0.1`. Inspector's two loopback origins are also allowed by CORS.
+For another client, configure its exact callback and browser origin:
 
 ```hcl
 callback_urls   = ["http://localhost:8080/callback"]
 allowed_origins = ["http://localhost:8080"]
 ```
 
-Native clients omit Origin and need no allowlist entry. Browser origins default
-to an empty set and must be configured explicitly.
+Native clients omit Origin and need no allowlist entry. Override the example's
+loopback defaults for any non-sandbox deployment.
 
 ```bash
 cd examples/mcp-http-api
@@ -37,6 +39,84 @@ export TEST_PASSWORD_ALICE='...' TEST_PASSWORD_BOB='...'
 Passwords are supplied through environment variables and never enter Terraform
 state. Outputs include `mcp_url`, `mcp_app_client_id`, `required_scope`,
 `authorization_endpoint`, `token_endpoint`, `resource_metadata_url`, and `user_subs`.
+
+## Login page and MCP Inspector
+
+After deploying the updated callback and CORS configuration, start the local
+page with Node.js 22 from this example directory:
+
+```bash
+node login/server.mjs
+```
+
+Open **http://localhost:8080**. **Continue to Cognito** starts a resource-bound
+authorization-code login with S256 PKCE. Cognito collects the email and password,
+then returns to this page's `/callback`. The page checks the single-use state
+before exchanging the code. It keeps tokens in memory, supports refresh-token
+rotation, and lets you copy the access token for Inspector's bearer token field.
+Reloading or **Clear token** clears the page's tokens; it does not sign out the
+Cognito browser session or revoke a token already copied to another client.
+
+For Inspector to own the OAuth flow, leave the login server running, download
+the public configuration from **http://localhost:8080/inspector-config.json**,
+then launch Inspector with the downloaded file:
+
+```bash
+npx @modelcontextprotocol/inspector --config /path/to/bookings-mcp-inspector.json --server bookings-mcp
+```
+
+The generated configuration targets the real `mcp_url` using Streamable HTTP.
+It preconfigures the public client ID and `openid email <required_scope>`.
+In Inspector **Server Settings → OAuth Settings**, its authorization URL override
+is `http://localhost:8080/authorize` and its token URL override is
+`http://localhost:8080/token`; the client secret is empty. Cognito does not need
+the `offline_access` scope, so **Request refresh token** is disabled in Inspector;
+Cognito still returns a refresh token for the code grant.
+
+If Inspector is already running, import the downloaded configuration or copy
+these values into its existing server settings. Starting a second Inspector on
+the same port will fail.
+
+Connect and authenticate in Inspector. It redirects to this login page, then
+**Continue to Cognito** sends its original callback, state, and PKCE challenge to
+Cognito. Cognito redirects directly to Inspector. The local token endpoint
+forwards code and refresh exchanges to Cognito with `resource=mcp_url`.
+The MCP endpoint still verifies Cognito tokens through its native JWT authorizer.
+The page and endpoint overrides are a local testing helper, not a replacement
+authorization server or a change to Cognito's discovery document. If your
+Inspector version lacks URL overrides or rejects Cognito discovery, use the
+standalone page and paste its access token into Inspector instead.
+
+Use `localhost` for the page. To change its port, set `MCP_LOGIN_PORT`, register
+`http://localhost:<port>/callback` in `callback_urls`, and apply Terraform again.
+If you change Inspector's origin or port, register its exact `/oauth/callback`
+and `/oauth/callback/debug` URLs too. Restart the login server after applying
+configuration changes; it reads the public Terraform outputs at startup.
+
+### Create a test user
+
+Terraform creates `alice@example.com` and `bob@example.com`; their passwords are
+set separately with `scripts/set-test-passwords.sh`. Cognito cannot return an
+existing user's password. To create a separate confirmed test user without
+changing Alice or Bob's password, use an AWS profile for the deployed account:
+
+```bash
+AWS_PROFILE=your-sandbox-profile node scripts/create-test-user.mjs
+```
+
+The script creates `inspector@example.com`, sets a random permanent password,
+and prints the username and password once it confirms the user. It suppresses
+email delivery and uses a private temporary file for the password, removed on
+exit. Passwords do not enter source or Terraform state. To choose another user
+or supply a password, set `TEST_USER_EMAIL` and optionally `TEST_USER_PASSWORD`.
+The script refuses to reset a confirmed existing user. This extra test user is
+created outside Terraform and has no seeded bookings; `get_my_bookings` returns
+an empty list. Use Alice or Bob to test the seeded booking ownership checks.
+
+The page uses the Achromatic ledger style (seed `2011435650`), with a blue grey
+ground, Geist, and the real deployment's connection settings. Its main action
+answers how to sign in for an MCP test. The bundled Geist font uses the
+[SIL Open Font License](login/geist.LICENSE.txt). The page needs no sample data.
 
 ## Positive login and smoke test
 
@@ -102,6 +182,7 @@ Run from the repository root with Node.js 22 and Terraform 1.9+:
 
 ```bash
 node --test modules/mcp-gateway/lambda/interceptor/index.test.js modules/mcp-http-api/lambda/mcp-server/*.test.mjs
+node --test examples/mcp-http-api/login/login.test.mjs
 terraform -chdir=modules/mcp-http-api test
 node --test modules/mcp-http-api/tests/package-isolation.test.mjs
 terraform -chdir=examples/mcp-http-api validate
@@ -119,10 +200,25 @@ missing scope under the earlier audience configuration. Direct backend invocatio
 checked Alice/Bob data scoping, and runtime probes rejected other-client tokens.
 These checks do not prove the current resource-bound OAuth flow.
 
-A positive call through the public URL using PKCE and `resource=MCP_URL`, browser
-CORS through API Gateway/CloudFront, and refresh-token rotation have not been
-verified against a newly deployed stack. The instructions above describe the
-current configuration; local tests do not establish live interoperability.
+On 2026-11-04, the local login page authenticated a confirmed
+`inspector@example.com` test user against the existing Cognito pool using S256
+PKCE, single-use state, and an OIDC nonce. The access token's `aud` matched
+`mcp_url`; `tools/list` and `get_my_bookings` succeeded through the public MCP
+endpoint. The booking response contained the test user's own subject and an
+empty bookings list. Refresh returned a new refresh token, and the refreshed
+access token was accepted by MCP.
+
+A second browser login used the local `/authorize` page and Inspector's
+registered `http://localhost:6274/oauth/callback`. An isolated browser captured
+the callback, verified the original state, exchanged the code with the original
+PKCE verifier through `/token`, and successfully listed MCP tools. This check
+captured the callback without running Inspector's UI workflow. Browser CORS
+through API Gateway/CloudFront remains unverified; the successful MCP requests
+used a Node.js HTTP client. Local verification passed 9 login tests, 90 existing
+runtime tests, Terraform example validation, and the responsive layout checks.
+The repository-wide formatting check still reports the unchanged
+`examples/customer-assistant/variables.tf` and `modules/mcp-gateway/variables.tf`;
+the changed example files pass formatting.
 
 ## Notes
 

@@ -16,15 +16,21 @@ variable "enable_password_auth_for_tests" {
 }
 
 variable "callback_urls" {
-  description = "Pre-registered authorization-code callbacks used by your MCP client."
+  description = "Pre-registered authorization-code callbacks for the local login page and MCP Inspector. Match the host, port, and path used by your client."
   type        = list(string)
-  default     = ["http://localhost:8080/callback"]
+  default = [
+    "http://localhost:8080/callback",
+    "http://localhost:6274/oauth/callback",
+    "http://localhost:6274/oauth/callback/debug",
+    "http://127.0.0.1:6274/oauth/callback",
+    "http://127.0.0.1:6274/oauth/callback/debug",
+  ]
 }
 
 variable "allowed_origins" {
   description = "Exact browser origins allowed to call MCP, for example http://localhost:8080. Native clients omit Origin and need no allowlist entry."
   type        = set(string)
-  default     = []
+  default     = ["http://localhost:6274", "http://127.0.0.1:6274"]
 }
 
 variable "test_users" {

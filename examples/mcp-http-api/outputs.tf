@@ -30,6 +30,18 @@ output "user_pool_id" {
   value = aws_cognito_user_pool.example.id
 }
 
+output "region" {
+  value = var.region
+}
+
+output "account_id" {
+  value = data.aws_caller_identity.current.account_id
+}
+
+output "callback_urls" {
+  value = var.callback_urls
+}
+
 output "user_subs" {
   description = "Cognito sub per test user; used by the smoke test to assert ownership."
   value       = { for k, u in aws_cognito_user.test : k => u.sub }
