@@ -8,7 +8,7 @@ AgentCore Gateway, no interceptor, no shared HMAC secret.
 
 | Resource | Purpose |
 |---|---|
-| `aws_cognito_resource_server` | Resource server with configurable identifier and scope (defaults: `mcp`, `read`; token form `mcp/read`) |
+| `aws_cognito_resource_server` | Resource server identified by `mcp_url`; the default scope is `<mcp_url>/read` |
 | `aws_cognito_user_pool_client` | Dedicated public PKCE client; the only `client_id` the MCP Lambda accepts |
 | `aws_apigatewayv2_api` + authorizer + `ANY /mcp` route | Edge JWT check enforcing the fully qualified `required_scope` |
 | `aws_lambda_function` (MCP server) | JSON-RPC over Streamable HTTP; invokes the tool backend |
@@ -25,7 +25,7 @@ introduced in v6.
 
 1. Client sends `Authorization: Bearer <access token>` from the MCP app client.
 2. API Gateway validates signature, issuer, audience (= canonical `mcp_url`), expiry,
-   and that the token carries `required_scope` (`mcp/read` by default). Failures return 401/403 here.
+   and that the token carries `required_scope` (`<mcp_url>/read` by default). Failures return 401/403 here.
 3. The MCP Lambda validates supplied Origin headers and re-checks `token_use=access`,
    `client_id`, resource audience, `required_scope`, and `sub`.
 4. `tools/call` validates arguments against the advertised input schema, then
@@ -64,6 +64,12 @@ binding requires managed login; the classic hosted UI (version 1) issues access
 tokens without `aud` even when `resource` reaches the login request. API-created
 domains do not automatically assign a branding style. The supporting example
 configures the domain and app-client branding.
+
+Cognito also requires requested custom scopes to belong to the resource being
+requested. The resource-server identifier therefore defaults to the exact
+`mcp_url`, and `required_scope` defaults to `<mcp_url>/read`. Always use the
+`required_scope` output; a scope such as `mcp/read` belongs to a different resource
+and cannot be requested with `resource=mcp_url` in managed login.
 
 The initial 401 response advertises `resource_metadata_url` in `WWW-Authenticate`.
 That public metadata identifies `mcp_url` as the protected resource and
@@ -235,32 +241,39 @@ isolation test after rebuilding.
 
 ## Shared Cognito pools
 
-`resource_server_identifier` defaults to `mcp` to preserve existing deployments.
-Cognito requires identifiers to be unique within a user pool. Each instance of
-this module creates and owns its own resource server, so only one Terraform
-resource may own a given pool/identifier pair. Changing `name` or `scope_name`
-does not give that resource server a new identifier.
+When `resource_server_identifier` is unset (`null`), each module instance uses
+its generated `mcp_url` as its identifier. Separate endpoints therefore own
+distinct resource servers even in the same pool, including a pool where the
+sibling `mcp-gateway` module already owns `mcp`. Only one Terraform resource may
+own each pool/identifier pair; the module creates its own resource server and
+does not adopt another owner's resource.
 
-When deploying multiple instances in the same pool, assign distinct identifiers,
-such as `mcp-bookings` and `mcp-catalog`. If the sibling `mcp-gateway` module or
-another owner already manages `mcp`, use a different identifier for every HTTP
-API instance. For example, add this input to the usage configuration above:
+The default `scope_name = "read"` produces `<mcp_url>/read`. The app client's
+allowed scopes, API route, Lambda checks, and protected-resource metadata use
+that value. Clients must request the `required_scope` output;
+`mcp_resource_server_identifier` exposes the identifier itself. The static
+CloudFront authentication challenge links to metadata where clients discover
+the scopes; putting the URL-derived scope in that policy would create a
+Terraform dependency cycle.
+
+Strict resource binding rejects an override that differs from `mcp_url`.
+To preserve an existing short identifier during a legacy migration, configure
+both inputs explicitly:
 
 ```hcl
 resource_server_identifier = "mcp-bookings"
+allow_unbound_access_tokens = true
 ```
 
-With the default `scope_name = "read"`, this produces `mcp-bookings/read`. The
-app client's allowed scopes, API route, Lambda checks, and OAuth discovery
-challenge all use that value. Clients should request the module's `required_scope`
-output; `mcp_resource_server_identifier` exposes the identifier itself. The
-identifier accepts 1–256 printable ASCII characters except spaces, double quotes,
-and backslashes; URL identifiers such as `https://bookings.example.com` are valid.
+This produces the legacy `mcp-bookings/read` scope and permits unbound access
+tokens from the dedicated MCP client. Identifiers accept 1–256 printable ASCII
+characters except spaces, double quotes, and backslashes.
 
-This module does not reuse an existing resource server. Choose an unused
-identifier before the first deployment. Changing it on a deployed instance
-replaces the resource server and changes the required scope; clients must request
-the new scope and obtain new access tokens.
+Upgrading a deployment that previously used the default `mcp` identifier
+replaces that resource server with the canonical URL identifier. Terraform
+creates the new resource server and migrates the app client's scopes before
+deleting the old one. Clients must request the new `required_scope` and obtain
+new access tokens; existing `mcp/read` tokens cannot satisfy the new scope.
 
 The shared-pool regression tests use mocked providers and deploy no AWS resources:
 

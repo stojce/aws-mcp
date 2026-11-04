@@ -8,6 +8,8 @@ Requires Terraform 1.9+ and AWS provider 6.13.0+ for the managed-login branding
 resource. The pool uses the Essentials feature plan and managed login version 2,
 with a default branding style assigned to the MCP app client. Classic hosted UI
 version 1 does not issue the resource audience required by the strict MCP policy.
+The Cognito resource-server identifier is the canonical MCP URL, so the default
+required scope is `<MCP_URL>/read`. Use the `required_scope` Terraform output.
 
 ## Deploy
 
@@ -65,7 +67,8 @@ Use the returned `access_token`; the default requires `aud=MCP_URL` and the MCP
 scope. Save tokens outside the checkout with permissions restricted to your user.
 
 ```bash
-./scripts/smoke.sh --url "$MCP_URL" --client-id "$MCP_CLIENT_ID" --token-file /tmp/mcp-access.token
+./scripts/smoke.sh --url "$MCP_URL" --client-id "$MCP_CLIENT_ID" \
+  --scope "$MCP_SCOPE" --token-file /tmp/mcp-access.token
 ```
 
 The smoke client checks resource audience locally, sends the negotiated

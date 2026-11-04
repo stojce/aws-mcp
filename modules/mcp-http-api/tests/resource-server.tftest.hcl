@@ -88,7 +88,7 @@ run "custom_identifier_reaches_every_scope_consumer" {
 }
 
 run "legacy_short_identifier_requires_explicit_compatibility" {
-  command = apply
+  command = plan
   variables {
     resource_server_identifier = "mcp"
   }
@@ -96,7 +96,7 @@ run "legacy_short_identifier_requires_explicit_compatibility" {
 }
 
 run "different_resource_url_is_rejected_in_strict_mode" {
-  command = apply
+  command = plan
   variables {
     resource_server_identifier = "https://different.example.com/mcp"
   }
