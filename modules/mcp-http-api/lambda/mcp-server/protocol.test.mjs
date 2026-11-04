@@ -357,6 +357,8 @@ test('2026-07-28: direct runtime callers receive the same metadata and version v
     _meta: { ...metadata(), [VERSION_KEY]: '2099-01-01' },
   }), cfg);
   assert.equal(unsupported.error.code, -32022);
+  const mismatch = await handleMessage(rpc('tools/list'), { ...cfg, protocolVersion: '2025-06-18' });
+  assert.equal(mismatch.error.code, -32020);
 });
 
 const headerTool = {
@@ -470,6 +472,30 @@ test('2026-07-28: browser preflight permits standard and configured parameter he
     headers: { ...event(msg).headers, Origin: 'https://untrusted.example.com' },
   }), { ...headerCfg, allowedOrigins: [origin] });
   assert.equal(denied.statusCode, 403);
+});
+
+test('2026-07-28: punctuation in valid parameter header names survives CORS and dispatch', async () => {
+  const context = {
+    ...cfg, allowedOrigins: ['https://app.example.com'],
+    tools: [{ name: 'header_tool', inputSchema: {
+      type: 'object', properties: { flag: { type: 'boolean', 'x-mcp-header': 'X&Y' } },
+    } }],
+  };
+  const preflight = await handleHttpEvent({
+    requestContext: { http: { method: 'OPTIONS' } },
+    headers: {
+      Origin: 'https://app.example.com', 'Access-Control-Request-Method': 'POST',
+      'Access-Control-Request-Headers': 'Mcp-Method, Mcp-Name, Mcp-Param-X&Y',
+    },
+  }, context);
+  assert.equal(preflight.statusCode, 204);
+  assert.match(preflight.headers['access-control-allow-headers'], /mcp-param-x&y/);
+  const msg = headerCall({ flag: false });
+  const response = await handleHttpEvent(event(msg, {
+    headers: { ...event(msg).headers, 'Mcp-Param-X&Y': 'false' },
+  }), context);
+  assert.equal(response.statusCode, 200);
+  assert.equal(bodyOf(response).result.isError, false);
 });
 
 test('2026-07-28: verified JWT boundaries still precede tool dispatch', async () => {

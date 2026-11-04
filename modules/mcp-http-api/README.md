@@ -1,20 +1,22 @@
 # mcp-http-api
 
 Option B from the design review: a public MCP endpoint built on the **native
-API Gateway HTTP API JWT authorizer** and a small MCP server Lambda. No
-AgentCore Gateway, no interceptor, no shared HMAC secret.
+API Gateway HTTP API JWT authorizer** and a small MCP server Lambda. Supports
+MCP `2026-07-28` and legacy `2025-06-18`, with Cognito or an existing
+external OAuth/OIDC authorization server.
 
 ## What it creates
 
 | Resource | Purpose |
 |---|---|
-| `aws_cognito_resource_server` | Resource server identified by `mcp_url`; the default scope is `<mcp_url>/read` |
-| `aws_cognito_user_pool_client` | Dedicated public PKCE client; the only `client_id` the MCP Lambda accepts |
+| `aws_cognito_resource_server` | Cognito mode only: resource server identified by `mcp_url`; the default scope is `<mcp_url>/read` |
+| `aws_cognito_user_pool_client` | Cognito mode only: dedicated public PKCE client |
 | `aws_apigatewayv2_api` + authorizer + `ANY /mcp` route | Edge JWT check enforcing the fully qualified `required_scope` |
 | `aws_lambda_function` (MCP server) | JSON-RPC over Streamable HTTP; invokes the tool backend |
 | IAM role | `lambda:InvokeFunction` on `tool_backend_arn` only |
 
-It does **not** create the user pool or the tool backend. Both are inputs.
+The tool backend is an input. Cognito mode also requires an existing user pool;
+external mode uses an existing authorization server and registered MCP client.
 
 Requires Terraform 1.9+ and `hashicorp/aws >= 6.0.0, < 7.0.0`. The supporting
 example requires AWS provider 6.13.0+ for managed-login branding. AWS provider v5
@@ -23,11 +25,12 @@ introduced in v6.
 
 ## Request path
 
-1. Client sends `Authorization: Bearer <access token>` from the MCP app client.
+1. Client sends `Authorization: Bearer <access token>` from the dedicated MCP client.
 2. API Gateway validates signature, issuer, audience (= canonical `mcp_url`), expiry,
    and that the token carries `required_scope` (`<mcp_url>/read` by default). Failures return 401/403 here.
-3. The MCP Lambda validates supplied Origin headers and re-checks `token_use=access`,
-   `client_id`, resource audience, `required_scope`, and `sub`.
+3. The MCP Lambda validates supplied Origin headers and re-checks the configured
+   client claim, resource audience, `required_scope`, and `sub`. Cognito also
+   requires `token_use=access`; external providers can require their own marker.
 4. `tools/call` validates arguments against the advertised input schema, then
    invokes the tool backend with `{ tool, arguments, identity: { sub, clientId } }`.
    `identity` comes only from the verified token. Client arguments cannot set it.
@@ -53,9 +56,73 @@ module "mcp" {
 
 The tool backend must scope every read by `event.identity.sub`.
 
+## External authorization servers
+
+Configure `external_authorization_server` and omit `user_pool_id`. The module
+creates no Cognito resources in this mode; register the client and its exact
+callbacks with your provider separately.
+
+```hcl
+module "mcp" {
+  source           = "../../modules/mcp-http-api"
+  name             = "bookings"
+  tool_backend_arn = var.tool_backend_arn
+  server_name      = "bookings-mcp"
+  tools            = var.tools
+
+  external_authorization_server = {
+    issuer          = "https://identity.example.com/realms/app"
+    client_id       = "bookings-mcp-client"
+    required_scope  = "bookings:read"
+    client_id_claim = "azp"
+    # Optional: require a provider-defined payload claim on access tokens.
+    # access_token_claim = { name = "kind", value = "access" }
+  }
+}
+```
+
+The provider must support the [MCP authorization requirements](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization):
+authorization code with S256 PKCE advertised in discovery, resource indicators,
+and resource-bound access tokens. API Gateway requires publicly discoverable
+issuer metadata/JWKS and currently supports RSA signing algorithms. Configure
+access tokens with a single string `aud` equal to the exact `mcp_url` output,
+including `/mcp`. Register that resource and the required scope with the provider.
+Always request `resource=mcp_url` during authorization and token exchange.
+
+`client_id_claim` defaults to `client_id`; use `azp` or your provider's
+verified client claim when appropriate. The Lambda requires that claim to equal
+`client_id` and requires the issuer and user `sub` on each request. It uses
+API Gateway's verified `jwt.scopes` array; direct runtime callers can supply
+`scope` or `scp`. External mode always requires resource binding, including
+when legacy MCP `2025-06-18` is selected.
+
+If `access_token_claim` is configured, its named payload claim must equal the
+configured value. Otherwise the provider must reserve this resource audience and
+scope for access tokens. API Gateway does not distinguish ID tokens automatically,
+and the JWT header `typ` is unavailable in its claim map. A supplied
+`token_use: "id"` is rejected. The runtime does not fetch or reinterpret the
+provider's tokens. See [AWS's JWT authorizer contract](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-jwt-authorizer.html).
+
+The backend still receives `identity: { sub, clientId }`. External subjects belong
+to that issuer; map them to your application's users if existing data uses Cognito
+subjects. One issuer is configured per endpoint.
+
+Terraform moves preserve the existing Cognito resource addresses on upgrade.
+Switching an existing module instance to external mode plans deletion of its
+module-owned Cognito client and resource server and changes the JWT issuer.
+Inspect that plan and migrate subjects and clients before applying it; a separate
+endpoint allows a gradual transition.
+
+The example Cognito pool's public discovery document was checked on 2026-11-04
+and omitted `code_challenge_methods_supported`. Strict MCP OAuth clients must
+refuse that discovery response even though Cognito supports S256 authorization.
+Use a compliant external server for those clients. The
+[protocol research](../../.scratch/mcp-on-aws/mcp-http-api-2026-07-28-protocol-research.md)
+records the source requirements and provider observation.
+
 ## Authorization code and PKCE
 
-Use the public Cognito app client returned as `mcp_app_client_id`. Pre-register
+In Cognito mode, use the public app client returned as `mcp_app_client_id`. Pre-register
 the MCP client's exact redirect URI in `callback_urls` and supply that client ID
 to the MCP software. This module does not provide dynamic client registration.
 The existing pool must use Cognito managed login (domain version 2), an Essentials
@@ -103,6 +170,8 @@ different identifiers and do not satisfy the default resource-audience check.
 
 3. On the callback, require the returned `state` to match the stored value before
    using the authorization `code`. Reject an error response or a mismatched state.
+   If `iss` is present, it must equal `authorization_server_issuer`. Require it
+   when discovery advertises `authorization_response_iss_parameter_supported: true`.
 4. POST an `application/x-www-form-urlencoded` body to the token endpoint:
 
    ```text
@@ -120,10 +189,10 @@ different identifiers and do not satisfy the default resource-audience check.
    identify this app client, `token_use` must be `access`, `aud` must contain
    `mcp_url`, and `scope` must contain `required_scope`. API Gateway verifies the
    signature, issuer, and expiry; the Lambda preserves the verified user's `sub`.
-6. Send `initialize` with a string `protocolVersion`, an object `capabilities`,
-   and `clientInfo` containing string `name` and `version`. Accept the supported
-   version, send `notifications/initialized`, then call tools. Follow the
-   protocol-header requirements below on subsequent requests.
+6. For MCP `2026-07-28`, call `server/discover` optionally, then `tools/list`
+   or `tools/call` directly. Every request carries protocol and capability
+   metadata and matching HTTP headers as described below. Legacy clients use
+   `initialize` and `notifications/initialized` with `2025-06-18`.
 
 ## Refresh tokens
 
@@ -162,24 +231,85 @@ client ID, remain rejected by the Lambda in both modes.
 
 ## Protocol version
 
-The endpoint supports MCP `2025-06-18` only. Initialization echoes that version
-when requested and returns it as the supported alternative for other versions,
-including `2025-03-26`. Initialization may omit `MCP-Protocol-Version`; an
-explicit invalid or unsupported header still receives HTTP 400.
+The endpoint supports MCP `2026-07-28` and legacy `2025-06-18`. The
+[versioned schema](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2026-07-28/schema.ts)
+and [HTTP transport specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)
+define the modern wire contract.
 
-After initialization, send `MCP-Protocol-Version: 2025-06-18` on every MCP request,
-including notifications and GET requests. Header names are case-insensitive.
-The stateless server does not retain the negotiated version between requests.
-When a later request omits the header, the transport specification's fallback is
-`2025-03-26`, which this endpoint does not support, so it returns HTTP 400.
-Empty, malformed, ambiguous, and unsupported version headers also return HTTP 400
-before tool dispatch. Public OAuth metadata routes do not require this header.
+Modern clients can call tools immediately; there is no initialization handshake
+or protocol session. Optional `server/discover` returns `supportedVersions`
+and the actual server capabilities (`tools`, with `listChanged: false`).
+Every request requires `params._meta` containing
+`io.modelcontextprotocol/protocolVersion` and
+`io.modelcontextprotocol/clientCapabilities`. An empty capability object is
+valid. Optional `io.modelcontextprotocol/clientInfo` identifies client software;
+it never establishes user identity.
+
+Send `MCP-Protocol-Version: 2026-07-28` and `Mcp-Method` matching the JSON-RPC
+method on every modern request. `tools/call` also requires `Mcp-Name` matching
+`params.name`. For example:
+
+```http
+POST /mcp HTTP/1.1
+Authorization: Bearer <access token>
+Content-Type: application/json
+Accept: application/json, text/event-stream
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/call
+Mcp-Name: get_my_bookings
+
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "get_my_bookings",
+    "arguments": {},
+    "_meta": {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities": {}
+    }
+  }
+}
+```
+
+Header names are case-insensitive; values must match exactly. For `Mcp-Name`
+and configured `Mcp-Param-*` headers, encode unsafe values as
+`=?base64?<Base64 of UTF-8 value>?=`. This includes non-ASCII, control characters,
+leading/trailing whitespace, and literal values matching that sentinel pattern.
+The server decodes the value before comparison.
+
+Every modern result includes `resultType: "complete"` and server information in
+`result._meta["io.modelcontextprotocol/serverInfo"]`. Discovery and tool-list
+results also include `ttlMs: 0` and `cacheScope: "private"`. Successful tool
+calls include the backend's JSON value in `structuredContent` and serialize the
+same value into text content. Tool execution and schema-validation errors remain
+complete results with `isError: true`.
+
+| Modern request failure | HTTP status | JSON-RPC code |
+| --- | --- | --- |
+| Missing or invalid required metadata; malformed call fields | 400 | `-32602` |
+| Missing, malformed, ambiguous, or mismatched mirrored headers | 400 | `-32020` |
+| Unsupported version | 400 | `-32022`, with `data.supported` and `data.requested` |
+| Unimplemented method, including modern `initialize` and `ping` | 404 | `-32601` |
+| Invalid JSON or JSON-RPC envelope, response, or batch | 400 | `-32700` or `-32600` |
+
+Legacy `initialize` selects `2025-06-18`, including when the client requests
+another version; modern semantics cannot be negotiated through that handshake.
+Initialization may omit `MCP-Protocol-Version`. Subsequent legacy requests and
+notifications must send `MCP-Protocol-Version: 2025-06-18`. Their original
+initialization, ping, tool-result, and notification behavior remains available.
+Missing version headers after initialization receive HTTP 400; the older
+`2025-03-26` fallback is not supported. Public OAuth metadata requires no
+protocol headers.
 
 Request IDs must be strings or integers in JavaScript's safe range; use a string
-for larger numeric identifiers. Null, fractional, object, and missing request IDs
-are rejected before dispatch. Notifications have no ID. Invalid initialization
-parameters return JSON-RPC `-32602`. Incoming JSON-RPC responses receive HTTP 400
-because this stateless server does not initiate requests that need client replies.
+for larger numeric identifiers. Null, fractional, and object IDs are rejected.
+Known request methods require an ID; notifications have none and receive HTTP 202
+with an empty body. Modern errors preserve readable IDs and omit unreadable IDs.
+Client JSON-RPC responses are rejected because the server issues no independent
+requests to clients. Session and event replay headers are ignored; GET and DELETE
+return HTTP 405 after authentication.
 
 ## Browser origins and CORS
 
@@ -197,7 +327,8 @@ clients may omit Origin and continue using bearer authentication.
 
 The same allowlist drives Lambda Origin validation, API Gateway CORS, and the
 CloudFront response policy. GET, POST, and OPTIONS and the `Authorization`,
-`Content-Type`, `MCP-Protocol-Version`, and `Accept` headers are allowed.
+`Content-Type`, `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name`, and `Accept`
+headers are allowed. Configured `Mcp-Param-*` headers are added automatically.
 `WWW-Authenticate` is exposed so trusted browsers can discover the OAuth server,
 including when the native JWT authorizer rejects a request before Lambda runs.
 Preflight OPTIONS routes and OAuth metadata are public; ordinary MCP requests
@@ -218,10 +349,20 @@ unresolved references, and asynchronous schemas fail startup. References must
 resolve within the tool's schema; the server does not fetch remote schemas.
 Each tool has its own schema namespace, so tools can reuse the same `$id`.
 
+MCP `2026-07-28` permits `x-mcp-header` annotations, for example
+`{ type: "string", "x-mcp-header": "Region" }` on a property. Names must be
+nonempty HTTP tokens and unique ignoring case. Only string, integer, and boolean
+properties reached solely through `properties` are supported, including nested
+objects. Annotations inside references, arrays, composition, or conditionals fail
+startup. Annotated integers must stay in JavaScript's safe range. Modern calls
+must mirror each supplied non-null value in `Mcp-Param-<name>`; missing/null
+values omit the header. Missing or mismatched recognized headers receive
+`-32020` before backend invocation. Legacy calls do not require these headers.
+
 Invalid arguments return a tool result with `isError: true` and never invoke the
 backend. Validation does not coerce types, insert defaults, or strip extra fields.
 Omitted arguments are validated as `{}`; explicit `null` and other non-object
-arguments are rejected. Valid arguments reach the backend unchanged, alongside
+arguments are rejected (modern `-32602`; legacy tool error). Valid arguments reach the backend unchanged, alongside
 identity derived from the verified token.
 
 The validator bundle and license notices are checked in and included in the
@@ -308,9 +449,17 @@ an intervening manifest change, saved-plan apply, and changes to every packaged
 source file. It requires no AWS credentials and deploys no AWS resources.
 It also executes the extracted runtime without development dependencies, checking
 argument validation and identity propagation from the packaged code.
-The entrypoint check uses a local AWS SDK stub to verify Origin enforcement,
-public preflight, request IDs, response status, deadline handling, and SDK abort
-signals without credentials or AWS requests.
+The entrypoint check uses a local AWS SDK stub to verify both protocol versions,
+Cognito and external identity propagation, Origin enforcement, public preflight,
+request IDs, response status, deadline handling, and SDK abort signals without
+credentials or AWS requests.
+
+Run the runtime suites and Terraform mock tests from the repository root:
+
+```bash
+node --test modules/mcp-gateway/lambda/interceptor/index.test.js modules/mcp-http-api/lambda/mcp-server/*.test.mjs
+terraform -chdir=modules/mcp-http-api test
+```
 
 ## Limits
 
@@ -342,7 +491,8 @@ audience configuration. That observation applies to legacy compatibility and
 does not describe the strict default. Direct backend checks demonstrated user
 scoping but did not exercise the OAuth boundary.
 
-The [current review](../../docs/review-mcp-http-api-2026-11-03.md) records local
-runtime, Terraform, and packaging checks. A complete resource-bound PKCE login,
-browser preflight through AWS, and rotated-token refresh still need live
-interoperability verification after deployment.
+The [earlier review](../../docs/review-mcp-http-api-2026-11-03.md) records checks
+before the protocol upgrade. Current protocol and external-auth checks cover
+local runtime behavior, mock infrastructure, and packaged Lambda execution.
+A complete resource-bound PKCE login with a compliant provider, browser preflight
+through AWS, and rotated-token refresh still need live verification after deployment.

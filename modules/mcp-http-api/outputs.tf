@@ -19,7 +19,7 @@ output "mcp_app_client_id" {
 }
 
 output "required_scope" {
-  description = "Scope the token must carry: <resource_server_identifier>/<scope_name>; defaults to <mcp_url>/read."
+  description = "Required OAuth scope: supplied by the external authorization server, or <resource_server_identifier>/<scope_name> in Cognito mode (defaults to <mcp_url>/read)."
   value       = local.full_scope
 }
 

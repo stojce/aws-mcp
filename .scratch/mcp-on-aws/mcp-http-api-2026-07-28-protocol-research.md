@@ -132,7 +132,7 @@ Subscriptions and MRTR define how richer features work; they do not justify adve
 
 ## Authorization and discovery
 
-Authorization is optional for the protocol overall, but this module intentionally provides it. The default resource-bound Cognito access-token flow already matches the key requirements: verify tokens issued for this MCP resource, use the canonical MCP URL as OAuth `resource` in authorization and token requests, authenticate each protected request, reject invalid tokens with 401 and insufficient scope with 403, and never pass the inbound bearer token through to a tool backend. Keep verified `sub`/client identity and deny-by-default checks. Per-request `clientInfo` and client capabilities cannot replace token verification. [Authorization][authorization], [Authorization security][auth-security]
+Authorization is optional for the protocol overall, but this module intentionally provides it. The default resource-bound Cognito runtime checks match the key token requirements: verify tokens issued for this MCP resource, use the canonical MCP URL as OAuth `resource` in authorization and token requests, authenticate each protected request, reject invalid tokens with 401 and insufficient scope with 403, and never pass the inbound bearer token through to a tool backend. These checks do not by themselves establish authorization-server discovery compatibility; the later public metadata observation below identifies a Cognito PKCE-advertisement gap. Keep verified `sub`/client identity and deny-by-default checks. Per-request `clientInfo` and client capabilities cannot replace token verification. [Authorization][authorization], [Authorization security][auth-security]
 
 The Protected Resource Metadata document **MUST** contain at least one `authorization_servers` issuer. Modern servers **MUST** provide either a `WWW-Authenticate` `resource_metadata` URL on 401 responses or the appropriate well-known metadata endpoint. Clients must support both, prefer a supplied challenge URL, and otherwise probe the endpoint-specific path before the root path. This is relaxed compared with the `2025-06-18` requirement to include the discovery challenge on 401. The existing two public well-known routes and CloudFront challenge decoration satisfy the discovery shape; no new endpoint is required. [Authorization discovery][auth-discovery], [Legacy authorization][legacy-authorization]; local [discovery.tf](../../modules/mcp-http-api/discovery.tf)
 
@@ -142,7 +142,7 @@ Static pre-registration remains valid. Client ID Metadata Documents are **SHOULD
 
 Provider/client requirements worth preserving or verifying:
 
-- Clients **MUST** use PKCE and verify `code_challenge_methods_supported` in authorization-server metadata, including OIDC discovery; absence means they must refuse to continue. OIDC authorization servers **MUST** advertise that field for MCP compatibility. PKCE working in a manual authorization flow alone does not prove this discovery requirement. No live Cognito discovery document was fetched in this research, so provider metadata is an explicit integration check, not a proven defect. [Authorization security][auth-security]
+- Clients **MUST** use PKCE and verify `code_challenge_methods_supported` in authorization-server metadata, including OIDC discovery; absence means they must refuse to continue. OIDC authorization servers **MUST** advertise that field for MCP compatibility. PKCE working in a manual authorization flow alone does not prove this discovery requirement. A later public read on 2026-11-04 confirmed the deployed Cognito issuer omits this field; see the external-authorization follow-up below. [Authorization security][auth-security], [Observed Cognito metadata][cognito-oidc-observed]
 - Authorization servers **SHOULD** return callback `iss` and must advertise `authorization_response_iss_parameter_supported: true` when doing so. Clients **MUST** validate a present `iss` against the recorded issuer before redeeming a code; absence is rejected only if support was advertised. This affects OAuth clients/examples, not JSON-RPC runtime routing. [Authorization: response validation][authorization]
 - Public-client refresh-token rotation is a **MUST**; the module already enables rotation. The MCP scope metadata should not claim `offline_access` as a resource requirement. [Authorization][authorization], [Authorization security][auth-security]; local [main.tf](../../modules/mcp-http-api/main.tf)
 - Insufficient-scope challenges **SHOULD** include `error="insufficient_scope"`, the scopes required for the operation, and the resource metadata URL. The current CloudFront response policy overrides Lambda challenges with a resource-metadata-only challenge; discovery still works via metadata, but the public edge loses this recommended step-up detail. This is a pre-existing recommendation gap, not a new mandatory protocol envelope change. [Authorization: scope challenge handling][authorization]; local [discovery.tf](../../modules/mcp-http-api/discovery.tf)
@@ -165,9 +165,99 @@ Provider/client requirements worth preserving or verifying:
 5. Verify browser preflights permit the new required headers through all configured layers and still deny untrusted Origins.
 6. If enabling `x-mcp-header`, verify startup annotation constraints, nested property extraction, missing/null arguments, numeric/boolean conversion, Base64 sentinel decoding, and header/body mismatch rejection.
 7. Keep tool schema validation and backend denial tests; verify malformed modern call fields differ from actionable schema-validation errors. Confirm cache hints are present on both discover and list results.
-8. Separately verify Cognito OIDC metadata advertises PKCE; update OAuth client examples to validate callback issuer information when provided.
+8. Verify the selected authorization server's OIDC/OAuth metadata advertises PKCE and `S256`; the checked Cognito issuer currently omits this advertisement. Update OAuth client examples to validate callback issuer information when provided.
 
-These checks derive from the requirements above. Unit tests can verify runtime and CORS behavior; Terraform validation can verify generated header configuration. Provider metadata and native-authorizer/CloudFront behavior require public metadata or live endpoint checks. This research did not run those live checks.
+These checks derive from the requirements above. Unit tests can verify runtime and CORS behavior; Terraform validation can verify generated header configuration. Provider metadata and native-authorizer/CloudFront behavior require public metadata or live endpoint checks. The follow-up fetched the public Cognito metadata; this research did not run authenticated external-provider or native-authorizer wire checks.
+
+## External authorization server follow-up
+
+Verified: 2026-11-04. The user requested support for selecting another authorization server after the Cognito discovery gap was observed. This section reviews the proposed `external_authorization_server` configuration against current official AWS and MCP sources; it does not claim that an unspecified external provider has been deployed or tested.
+
+### Concrete Cognito public metadata observation
+
+Fetched this public OIDC discovery document without credentials:
+
+`https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_vaNyAkA6X/.well-known/openid-configuration`
+
+| Field | Observed value | Meaning |
+| --- | --- | --- |
+| `issuer` | `https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_vaNyAkA6X` | Matches the deployed issuer specified for the check. |
+| `jwks_uri` | The same issuer followed by `/.well-known/jwks.json` | Signing-key discovery is advertised. |
+| `id_token_signing_alg_values_supported` | `["RS256"]` | The document advertises RSA ID-token signing. |
+| `response_types_supported` | `["code", "token"]` | Authorization-code flow is advertised, but this does not advertise PKCE. |
+| `code_challenge_methods_supported` | **Field absent** | `S256` is not advertised; this is not an empty-list or unsupported-method observation. |
+
+Source: the [issuer-owned public metadata response][cognito-oidc-observed], checked 2026-11-04. A local fetched copy was held at `/private/tmp/mcp-http-api-cognito-public-oidc-2026-11-04.json`; no token or credential was fetched.
+
+The missing field conflicts with the modern MCP rule that clients **MUST** verify PKCE support through authorization-server metadata, including OIDC discovery, and **MUST** refuse to proceed if `code_challenge_methods_supported` is absent. OIDC authorization servers **MUST** include the field for MCP compatibility, and technically capable clients **MUST** use `S256`. This proves a discovery-compatibility gap for the observed document; it does not prove that Cognito cannot execute an authorization-code/S256 exchange. The module's optional external issuer mode addresses provider selection while preserving strict token validation. [Authorization security: authorization code protection][auth-security]
+
+### Native HTTP API JWT authorizer constraints
+
+AWS explicitly supports JWTs used with OIDC and OAuth 2.0 identity providers; the native authorizer is not restricted to Cognito. Its configuration selects an issuer and audience entries, while route configuration selects required authorization scopes. The issuer and signing keys must be reachable by the AWS authorizer so that it can retrieve the issuer's `jwks_uri`; provider metadata and keys are an integration prerequisite rather than Lambda-supplied credentials. The examined native-authorizer guide does not promise an arbitrary RFC8414-only discovery-path fallback, so use a provider with usable OIDC discovery and verify native authorizer compatibility. [AWS native JWT authorizers][aws-native-jwt], [AWS JWT configuration reference][aws-jwt-config]
+
+| Check or constraint | Official AWS behavior | Implication for external mode |
+| --- | --- | --- |
+| Token format/signature | Decode and validate a signed JWT using issuer keys; **currently only RSA-based algorithms are supported**. | Do not claim support for opaque access tokens, HMAC, EC, or EdDSA tokens through this native authorizer. RS256 is a suitable provider contract. |
+| Signing key | JWT header `kid` must identify the signing key from `jwks_uri`. Keys may be cached for up to two hours on a best-effort basis. | Publish discoverable RSA keys; overlap old/new keys during rotation. |
+| Issuer | Token `iss` must match configured issuer. | Use the actual metadata issuer, including any tenant/path component. |
+| Audience | Validate `aud` against configured audience entries; fall back to `client_id` only when `aud` is absent. If both are present, validate `aud`. | Configure only the canonical MCP resource audience. An edge-valid resource audience does **not** pin the application client ID; the Lambda must do that separately. |
+| Time claims | `exp` must be after current UTC; `nbf` and `iat` must be before current UTC. | Tokens must satisfy AWS time validation before reaching Lambda. |
+| Route scope | `scope` **or** `scp` must include at least one configured route scope. Multiple route scopes are alternatives, not an all-scopes requirement. | A single `required_scope` maps directly to the existing route. |
+| Token purpose | AWS explicitly says there is no general mechanism to distinguish JWT access tokens from ID tokens; it recommends scopes and access-token-only issuer/audience contracts. | Keep resource audience and scopes strict, and use a configured purpose marker when the provider supplies one. |
+| Custom claims | Native JWT configuration has no arbitrary client-claim or purpose-marker predicate. Validated claims are forwarded to the integration. | Enforce `client_id_claim`, optional access-token marker, and nonempty `sub` in the runtime. |
+| Bearer transport | AWS allows a configured header or query-string identity source. | Keep `$request.header.Authorization`; MCP prohibits bearer tokens in the query string. |
+
+Sources: [AWS native JWT authorizer validation][aws-native-jwt], [AWS authorizer API/configuration][aws-jwt-config], [MCP access-token usage][authorization]. The RSA restriction describes the current AWS native implementation, not a restriction imposed by MCP itself.
+
+### Lambda payload v2.0 claim serialization
+
+The official API Gateway payload-v2 example exposes two separate members:
+
+```json
+{
+  "requestContext": {
+    "authorizer": {
+      "jwt": {
+        "claims": { "claim1": "value1", "claim2": "value2" },
+        "scopes": ["scope1", "scope2"]
+      }
+    }
+  }
+}
+```
+
+The first-party AWS Go event model declares `Claims map[string]string` and `Scopes []string`. The first-party Java model likewise declares `Map<String, String> claims` and `List<String> scopes`; the .NET model declares `IDictionary<string, string> Claims` and `string[] Scopes`. These are affirmative evidence that the native event contract treats claim values as strings, while scopes have a separate real list representation. They do **not** establish that raw JWT `aud` or `scp` arrays are preserved as JavaScript arrays in the integration event. [AWS HTTP API Lambda payload][aws-http-lambda-payload], [AWS Go event type][aws-go-jwt-event], [AWS Java event type][aws-java-jwt-event], [AWS .NET event type][aws-dotnet-jwt-event]
+
+No primary specification or checked first-party fixture supplied an escaping/serialization grammar for **multi-valued `aud`/`scp` becoming claim strings**. The checked Go/Java/.NET standard fixtures show scalar example claims plus `jwt.scopes`; the .NET authorization fixture also uses string-valued claims. It would be unsupported to assert whether arbitrary array claims become JSON-encoded strings, comma-separated lists, or another representation. A real gateway event from the selected issuer is needed to establish any broader handling. [AWS Go fixture][aws-go-jwt-fixture], [AWS Java fixture][aws-java-jwt-fixture], [AWS .NET fixture][aws-dotnet-jwt-fixture]
+
+Concrete implementation recommendation: require a **single scalar audience exactly equal to `mcp_url`** in external-provider JWTs, and use the trusted **`event.requestContext.authorizer.jwt.scopes` list** for HTTP scope verification when provided. Raw `scope`/`scp` parsing can support direct-runtime callers or tested scalar representations, but must not substitute undocumented bracket/comma parsing for audience membership. Existing unit fixtures with real `aud` arrays demonstrate only direct-runtime acceptance, not native gateway preservation. Scope lists must come from the authorizer context, never client arguments or ordinary request headers. This is a deliberate provider-compatibility contract based on the documented event shape. [AWS HTTP API Lambda payload][aws-http-lambda-payload], [AWS Go event type][aws-go-jwt-event]
+
+### Review of the proposed configuration
+
+The proposed optional object is suitable with an explicit provider contract:
+
+| Configuration | Required interpretation |
+| --- | --- |
+| `issuer` | Exact HTTPS authorization-server issuer, used both in API Gateway JWT configuration and protected-resource `authorization_servers` metadata. The provider must publish usable signing-key discovery. |
+| `client_id` | Existing registered public OAuth client identifier; external mode does not create this client or store a client secret. |
+| `required_scope` | One nonempty OAuth scope token that the provider issues for this MCP resource; configure it on the route and verify exact scope membership in the trusted context. |
+| `client_id_claim`, default `client_id` | Exact scalar JWT payload claim identifying the configured application client. A provider-specific claim such as `azp` may be selected when the provider documents that access-token contract; do not infer it from `aud`. |
+| Optional `access_token_claim: { name, value }` | Additional exact scalar payload-claim predicate. If configured, absence or mismatch denies the token. |
+| External audience policy | Always require the canonical `mcp_url` audience; no client-ID audience fallback or unbound-token compatibility opt-in. |
+
+The mapping of issuer/audience/scope to native authorizer fields follows [AWS JWT authorizers][aws-native-jwt]. A default `client_id` predicate also aligns with the [RFC9068 JWT access-token profile][rfc9068], which requires that payload claim. Alternative claim names remain a provider contract rather than a guarantee of generic OAuth interoperability. [MCP resource binding][authorization], [Client registration][registration]
+
+Requiring the resource audience is consistent with MCP's **MUST** to verify tokens specifically issued for this resource. Clients **MUST** send `resource=mcp_url` in both authorization and token requests, and the selected provider must produce a token whose accepted audience corresponds to that resource. Rejecting absent `aud` in the runtime prevents AWS's `client_id` fallback from weakening this policy even in an edge-valid corner case. Callback/logout URLs and OAuth client setup are managed at the external provider; no Cognito resource server, app client, or password-flow configuration is needed in this selected mode. [MCP authorization][authorization], [AWS audience precedence][aws-native-jwt]
+
+The optional marker checks a **payload claim**, not the JOSE header. RFC9068 places `typ: "at+jwt"` in the JWT header; the documented native-authorizer `claims` member does not expose that header. Without a configured marker, the provider must reserve the selected resource audience/scope contract for access tokens. Rejecting a supplied `token_use` other than `"access"` is a conservative compatibility rule, while allowing the claim to be absent supports providers that do not use Cognito's marker. Do not claim that these predicates universally identify every provider's access and ID tokens. [AWS token-purpose caveat][aws-native-jwt], [RFC9068 header typing][rfc9068], [AWS Lambda event shape][aws-http-lambda-payload]
+
+Keep `identity.sub` and `identity.clientId` derived from the validated context and configured client-claim mapping, never from tool arguments. A subject is local to its issuer; switching from Cognito to another provider does not imply that its `sub` equals an existing Cognito user ID. Backends whose records are keyed by Cognito subjects may need an explicit mapping or migration. A single selected issuer avoids accepting multiple subject namespaces concurrently, but does not perform that migration. [OIDC subject definition][oidc-core], [RFC9068 subject claim][rfc9068]
+
+### Provider qualification and remaining verification
+
+Before claiming a specific provider works, verify its public metadata has the exact issuer, usable RSA JWKS, and `code_challenge_methods_supported` including `S256`; verify a registered public client can request the canonical MCP resource and required scope with authorization-code/PKCE. Then inspect a native JWT-authorizer event privately to confirm scalar `aud`, configured client claim, subject, optional marker, and normalized `jwt.scopes` meet the documented contract. A scope string or true-array unit fixture alone does not verify gateway serialization. Public metadata checks need no bearer token; live token/event checks must keep tokens and credentials out of repo artifacts. [MCP authorization security][auth-security], [MCP resource parameter][authorization], [AWS native JWT validation][aws-native-jwt], [AWS Lambda payload][aws-http-lambda-payload]
+
+The concrete public Cognito metadata check was completed. An external provider was not specified or live-tested by this research task, and the exact string encoding of multi-valued native claim values remains unverified. These are verification limits, not reasons to weaken the configured audience, client, scope, or subject checks.
 
 [schema-main]: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2026-07-28/schema.ts
 [intro]: https://modelcontextprotocol.io/docs/2026-07-28/getting-started/intro
@@ -191,3 +281,15 @@ These checks derive from the requirements above. Unit tests can verify runtime a
 [overview]: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/3c4d91b7e832d9b74338d56eed03403ccc662123/docs/specification/2026-07-28/index.mdx
 [legacy-http]: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/3c4d91b7e832d9b74338d56eed03403ccc662123/docs/specification/2025-06-18/basic/transports.mdx
 [legacy-authorization]: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/3c4d91b7e832d9b74338d56eed03403ccc662123/docs/specification/2025-06-18/basic/authorization.mdx
+[cognito-oidc-observed]: https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_vaNyAkA6X/.well-known/openid-configuration
+[aws-native-jwt]: https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-jwt-authorizer.html
+[aws-jwt-config]: https://docs.aws.amazon.com/apigatewayv2/latest/api-reference/apis-apiid-authorizers.html#apis-apiid-authorizers-model-jwtconfiguration
+[aws-http-lambda-payload]: https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-develop-integrations-lambda.html#http-api-develop-integrations-lambda.proxy-format
+[aws-go-jwt-event]: https://github.com/aws/aws-lambda-go/blob/41118539f90fa1989458560031d82a16b3686722/events/apigw.go#L156
+[aws-java-jwt-event]: https://github.com/aws/aws-lambda-java-libs/blob/1b59889e10f99369e6133adac117f6fb55333e3f/aws-lambda-java-events/src/main/java/com/amazonaws/services/lambda/runtime/events/APIGatewayV2HTTPEvent.java#L75
+[aws-dotnet-jwt-event]: https://github.com/aws/aws-lambda-dotnet/blob/3ff8ae1ba913ffc1113b49531016f6d1c019bb78/Libraries/src/Amazon.Lambda.APIGatewayEvents/APIGatewayHttpApiV2ProxyRequest.cs#L331
+[aws-go-jwt-fixture]: https://github.com/aws/aws-lambda-go/blob/41118539f90fa1989458560031d82a16b3686722/events/testdata/apigw-v2-request-jwt-authorizer.json
+[aws-java-jwt-fixture]: https://github.com/aws/aws-lambda-java-libs/blob/1b59889e10f99369e6133adac117f6fb55333e3f/aws-lambda-java-tests/src/test/resources/apigw_http_event.json
+[aws-dotnet-jwt-fixture]: https://github.com/aws/aws-lambda-dotnet/blob/3ff8ae1ba913ffc1113b49531016f6d1c019bb78/Libraries/test/EventsTests.Shared/http-api-v2-request.json
+[rfc9068]: https://www.rfc-editor.org/rfc/rfc9068
+[oidc-core]: https://openid.net/specs/openid-connect-core-1_0.html#IDToken

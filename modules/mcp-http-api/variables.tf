@@ -173,8 +173,9 @@ locals {
   # Canonical JSON exposes annotation names without depending on schema layout.
   # The Lambda validates their token syntax, uniqueness, and property paths.
   tool_param_headers = distinct(flatten([for tool in var.tools : [
-    for annotation in regexall("\"x-mcp-header\":\"([!#$%&'*+.^_\\x60|~0-9A-Za-z-]+)\"", jsonencode(jsondecode(tool.input_schema))) :
-    "mcp-param-${lower(annotation[0])}"
+    for annotation in regexall("\"x-mcp-header\":\"((?:\\\\.|[^\"\\\\])*)\"", jsonencode(jsondecode(tool.input_schema))) :
+    "mcp-param-${lower(jsondecode("\"${annotation[0]}\""))}"
+    if can(regex("^[!#$%&'*+.^_\\x60|~0-9A-Za-z-]+$", jsondecode("\"${annotation[0]}\"")))
   ]]))
   cors_request_headers       = concat(["authorization", "content-type", "mcp-protocol-version", "accept", "mcp-method", "mcp-name"], local.tool_param_headers)
   cors_expose_headers        = ["WWW-Authenticate"]

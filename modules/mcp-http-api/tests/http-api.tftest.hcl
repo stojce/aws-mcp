@@ -130,6 +130,7 @@ run "annotated_tool_headers_reach_every_cors_layer" {
         type = "object"
         properties = {
           count = { type = "integer", "x-mcp-header" = "Count" }
+          flag  = { type = "boolean", "x-mcp-header" = "X&Y" }
           options = {
             type = "object"
             properties = {
@@ -144,7 +145,7 @@ run "annotated_tool_headers_reach_every_cors_layer" {
     condition = (
       aws_apigatewayv2_api.mcp.cors_configuration[0].allow_headers == toset([
         "authorization", "content-type", "mcp-protocol-version", "accept",
-        "mcp-method", "mcp-name", "mcp-param-count", "mcp-param-region",
+        "mcp-method", "mcp-name", "mcp-param-count", "mcp-param-region", "mcp-param-x&y",
       ]) &&
       aws_cloudfront_response_headers_policy.discovery.cors_config[0].access_control_allow_headers[0].items == aws_apigatewayv2_api.mcp.cors_configuration[0].allow_headers &&
       jsondecode(local.tools_manifest).tools[0].inputSchema.properties.options.properties.region["x-mcp-header"] == "Region"

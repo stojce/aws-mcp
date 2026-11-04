@@ -201,8 +201,8 @@ resource "aws_apigatewayv2_authorizer" "jwt" {
 
   jwt_configuration {
     issuer = local.authorization_issuer
-    # Cognito resource indicators put the canonical MCP URI in aud. API Gateway
-    # checks client_id only when aud is absent; the runtime always pins client_id.
+    # Tokens bind aud to the canonical MCP URI. API Gateway checks client_id
+    # only when aud is absent; the runtime pins the configured client claim.
     audience = concat(
       [local.mcp_url],
       var.allow_unbound_access_tokens ? [local.mcp_client_id] : []

@@ -71,9 +71,19 @@ scope. Save tokens outside the checkout with permissions restricted to your user
   --scope "$MCP_SCOPE" --token-file /tmp/mcp-access.token
 ```
 
-The smoke client checks resource audience locally, sends the negotiated
-`MCP-Protocol-Version: 2025-06-18`, and verifies initialization, tool discovery,
-and user-scoped calls. API Gateway still performs JWT signature verification.
+The smoke client checks resource audience locally, sends
+`MCP-Protocol-Version: 2026-07-28`, matching method/name headers, and required
+per-request metadata. It verifies `server/discover`, tool discovery, and
+user-scoped calls. API Gateway performs JWT signature verification.
+
+The checked Cognito discovery document omits `code_challenge_methods_supported`,
+which strict modern MCP OAuth clients require. For those clients, configure the
+module's [external authorization server mode](../../modules/mcp-http-api/README.md#external-authorization-servers)
+with a compliant provider. This sandbox example provisions Cognito; the module
+also works without a user pool when `external_authorization_server` is set.
+The smoke client accepts `--authorization-mode external --client-id-claim azp`
+for a provider using `azp`, along with the external endpoint, client ID, scope,
+and token-file flags.
 
 For the optional scope-denial check, complete a second PKCE login with
 `scope=openid email` and the same resource. Pass that resource-bound token with
@@ -91,7 +101,7 @@ grace period and a fixed 30-day lifetime from the original sign-in.
 Run from the repository root with Node.js 22 and Terraform 1.9+:
 
 ```bash
-node --test modules/mcp-gateway/lambda/interceptor/index.test.js modules/mcp-http-api/lambda/mcp-server/runtime.test.mjs
+node --test modules/mcp-gateway/lambda/interceptor/index.test.js modules/mcp-http-api/lambda/mcp-server/*.test.mjs
 terraform -chdir=modules/mcp-http-api test
 node --test modules/mcp-http-api/tests/package-isolation.test.mjs
 terraform -chdir=examples/mcp-http-api validate

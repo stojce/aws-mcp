@@ -11,6 +11,8 @@
 #   --url URL                  MCP endpoint (default: terraform output mcp_url)
 #   --client-id ID             MCP app client id (default: terraform output mcp_app_client_id)
 #   --scope SCOPE              required scope (default: terraform output required_scope)
+#   --authorization-mode MODE  cognito (default) or external
+#   --client-id-claim CLAIM    verified client claim (default: client_id; external providers may use azp)
 #   --negative-only            run only the checks that need no valid token
 #
 # Exit 0 = all checks passed; 1 = at least one failed.
@@ -25,6 +27,9 @@ MCP_URL="${SMOKE_MCP_URL:-}"
 CLIENT_ID="${SMOKE_CLIENT_ID:-}"
 REQUIRED_SCOPE="${SMOKE_REQUIRED_SCOPE:-}"
 NEGATIVE_ONLY="${SMOKE_NEGATIVE_ONLY:-0}"
+AUTHORIZATION_MODE="${SMOKE_AUTHORIZATION_MODE:-cognito}"
+CLIENT_ID_CLAIM="${SMOKE_CLIENT_ID_CLAIM:-client_id}"
+PROTOCOL_VERSION="2026-07-28"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -33,11 +38,18 @@ while [[ $# -gt 0 ]]; do
     --url) MCP_URL="$2"; shift 2 ;;
     --client-id) CLIENT_ID="$2"; shift 2 ;;
     --scope) REQUIRED_SCOPE="$2"; shift 2 ;;
+    --authorization-mode) AUTHORIZATION_MODE="$2"; shift 2 ;;
+    --client-id-claim) CLIENT_ID_CLAIM="$2"; shift 2 ;;
     --negative-only) NEGATIVE_ONLY=1; shift ;;
-    -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+
+if [[ "$AUTHORIZATION_MODE" != "cognito" && "$AUTHORIZATION_MODE" != "external" ]]; then
+  echo "--authorization-mode must be cognito or external" >&2
+  exit 2
+fi
 
 if [[ -z "$MCP_URL" ]]; then
   MCP_URL="$(terraform output -raw mcp_url 2>/dev/null || true)"
@@ -65,11 +77,48 @@ request() {
   local tmp; tmp="$(mktemp)"
   local -a auth=()
   [[ -n "$token" ]] && auth=(-H "Authorization: Bearer $token")
+  local -a metadata_headers=()
+  if [[ "$method" == "POST" ]]; then
+    local prepared rpc_method rpc_name
+    prepared="$(python3 -c '
+import base64, json, re, sys
+raw, version = sys.argv[1:]
+try:
+    msg = json.loads(raw)
+except json.JSONDecodeError:
+    msg = None
+rpc_method, rpc_name = "", ""
+if isinstance(msg, dict):
+    rpc_method = msg.get("method", "")
+    params = msg.setdefault("params", {}) if "id" in msg else msg.get("params", {})
+    if "id" in msg:
+        params["_meta"] = {
+            "io.modelcontextprotocol/protocolVersion": version,
+            "io.modelcontextprotocol/clientCapabilities": {},
+            "io.modelcontextprotocol/clientInfo": {"name": "smoke", "version": "0"},
+        }
+    if rpc_method in ("tools/call", "prompts/get"):
+        rpc_name = params.get("name", "")
+    elif rpc_method == "resources/read":
+        rpc_name = params.get("uri", "")
+    if rpc_name and (not re.fullmatch(r"[\x20-\x7E\t]*", rpc_name)
+                     or rpc_name.strip() != rpc_name
+                     or (rpc_name.startswith("=?base64?") and rpc_name.endswith("?="))):
+        rpc_name = "=?base64?" + base64.b64encode(rpc_name.encode("utf-8")).decode("ascii") + "?="
+print(json.dumps({"body": json.dumps(msg) if msg is not None else raw,
+                  "method": rpc_method, "name": rpc_name}))
+' "$body" "$PROTOCOL_VERSION")"
+    body="$(jq_py 'd["body"]' <<<"$prepared")"
+    rpc_method="$(jq_py 'd["method"]' <<<"$prepared")"
+    rpc_name="$(jq_py 'd["name"]' <<<"$prepared")"
+    [[ -n "$rpc_method" ]] && metadata_headers+=(-H "Mcp-Method: $rpc_method")
+    [[ -n "$rpc_name" ]] && metadata_headers+=(-H "Mcp-Name: $rpc_name")
+  fi
   local raw
   raw="$(curl -sS -o "$tmp" -D "$tmp.h" -w '%{http_code}' -X "$method" "$MCP_URL" \
     -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' \
-    -H 'MCP-Protocol-Version: 2025-06-18' \
-    "${auth[@]}" --data-binary "$body" 2>"$tmp.err")" || raw="000"
+    -H "MCP-Protocol-Version: $PROTOCOL_VERSION" \
+    "${metadata_headers[@]}" "${auth[@]}" --data-binary "$body" 2>"$tmp.err")" || raw="000"
   STATUS="$raw"
   BODY="$(cat "$tmp")"
   HEADERS="$(tr -d '\r' < "$tmp.h" | tr '[:upper:]' '[:lower:]')"
@@ -88,6 +137,8 @@ tok, key = sys.argv[1], sys.argv[2]
 p = tok.split('.')[1]
 p += '=' * (-len(p) % 4)
 value = json.loads(base64.urlsafe_b64decode(p)).get(key, '')
+if key in ('scope', 'scp') and isinstance(value, list):
+    value = ' '.join(value) if all(isinstance(item, str) for item in value) else ''
 print(json.dumps(value) if key == 'aud' else value)
 PY
 }
@@ -153,42 +204,42 @@ elif [[ -z "$REQUIRED_SCOPE" ]]; then
 else
   TOKEN="$(tr -d '[:space:]' < "$TOKEN_FILE")"
   SUB="$(claim "$TOKEN" sub)"
-  TOKEN_CLIENT="$(claim "$TOKEN" client_id)"
+  TOKEN_CLIENT="$(claim "$TOKEN" "$CLIENT_ID_CLAIM")"
   TOKEN_USE="$(claim "$TOKEN" token_use)"
   TOKEN_SCOPE="$(claim "$TOKEN" scope)"
+  [[ -z "$TOKEN_SCOPE" ]] && TOKEN_SCOPE="$(claim "$TOKEN" scp)"
   TOKEN_AUD="$(claim "$TOKEN" aud)"
 
   # Preflight: fail early with the real reason instead of a confusing 403 later.
-  if [[ "$TOKEN_USE" != "access" ]]; then
+  if [[ "$AUTHORIZATION_MODE" == "external" && -z "$TOKEN_USE" ]]; then
+    pass "preflight external access-token contract is checked by the server"
+  elif [[ "$TOKEN_USE" != "access" ]]; then
     fail "preflight token_use=access" "got '$TOKEN_USE'"
   else
     pass "preflight token_use=access"
   fi
   if [[ -n "$CLIENT_ID" && "$TOKEN_CLIENT" != "$CLIENT_ID" ]]; then
-    fail "preflight client_id is MCP app client" "token client_id=$TOKEN_CLIENT, expected $CLIENT_ID"
+    fail "preflight client claim is MCP app client" "token $CLIENT_ID_CLAIM=$TOKEN_CLIENT, expected $CLIENT_ID"
   else
-    pass "preflight client_id is MCP app client"
+    pass "preflight client claim is MCP app client"
   fi
   if [[ " $TOKEN_SCOPE " == *" $REQUIRED_SCOPE "* ]]; then
     pass "preflight scope includes the required scope"
   else
-    fail "preflight scope includes the required scope" "scope='$TOKEN_SCOPE' (re-run the auth flow with scope=openid email $REQUIRED_SCOPE)"
+    fail "preflight scope includes the required scope" "scope='$TOKEN_SCOPE' (re-run the auth flow with the required scope $REQUIRED_SCOPE)"
   fi
-  if [[ "$(python3 -c 'import json,sys; aud=json.loads(sys.argv[1]); expected=sys.argv[2]; print(aud == expected or (isinstance(aud, list) and expected in aud))' "$TOKEN_AUD" "$MCP_URL")" == "True" ]]; then
-    pass "preflight aud contains mcp_url"
+  if [[ "$(python3 -c 'import json,sys; aud=json.loads(sys.argv[1]); expected,mode=sys.argv[2:]; print(aud == expected or (mode == "cognito" and isinstance(aud, list) and expected in aud))' "$TOKEN_AUD" "$MCP_URL" "$AUTHORIZATION_MODE")" == "True" ]]; then
+    pass "preflight aud binds mcp_url"
   else
-    fail "preflight aud contains mcp_url" "Request resource=mcp_url in both authorization and token requests."
+    fail "preflight aud binds mcp_url" "External providers need a single string aud=mcp_url. Request resource=mcp_url in both authorization and token requests."
   fi
 
-  request "$TOKEN" '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}'
-  if [[ "$STATUS" == "200" ]] && [[ "$(jq_py 'd["result"]["serverInfo"]["name"]' <<<"$BODY")" != "" ]] && [[ "$(jq_py 'd["result"]["protocolVersion"]' <<<"$BODY")" == "2025-06-18" ]]; then
-    pass "initialize -> 200 with serverInfo"
+  request "$TOKEN" '{"jsonrpc":"2.0","id":1,"method":"server/discover"}'
+  if [[ "$STATUS" == "200" ]] && [[ "$(jq_py 'd["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"]' <<<"$BODY")" != "" ]] && [[ "$(jq_py '"2026-07-28" in d["result"]["supportedVersions"] and d["result"]["resultType"] == "complete" and d["result"]["ttlMs"] >= 0 and d["result"]["cacheScope"] == "private"' <<<"$BODY")" == "True" ]]; then
+    pass "server/discover -> 200 with modern capabilities and serverInfo"
   else
-    fail "initialize -> 200 with serverInfo" "got $STATUS: $BODY"
+    fail "server/discover -> 200 with modern capabilities and serverInfo" "got $STATUS: $BODY"
   fi
-
-  request "$TOKEN" '{"jsonrpc":"2.0","method":"notifications/initialized"}'
-  if [[ "$STATUS" == "202" && -z "$BODY" ]]; then pass "notifications/initialized -> 202 empty"; else fail "notifications/initialized -> 202 empty" "got $STATUS: $BODY"; fi
 
   request "$TOKEN" '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
   if [[ "$(jq_py '[t["name"] for t in d["result"]["tools"]]' <<<"$BODY")" == *"get_my_bookings"* ]]; then
@@ -198,7 +249,7 @@ else
   fi
 
   request "$TOKEN" '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_my_bookings","arguments":{}}}'
-  if [[ "$STATUS" == "200" && "$(jq_py 'd["result"]["isError"]' <<<"$BODY")" == "False" ]]; then
+  if [[ "$STATUS" == "200" && "$(jq_py 'd["result"]["isError"]' <<<"$BODY")" == "False" && "$(jq_py 'd["result"]["resultType"]' <<<"$BODY")" == "complete" ]]; then
     TEXT="$(jq_py 'd["result"]["content"][0]["text"]' <<<"$BODY")"
     OWNER="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['owner'])" "$TEXT" 2>/dev/null)"
     COUNT="$(python3 -c "import json,sys; print(len(json.loads(sys.argv[1])['bookings']))" "$TEXT" 2>/dev/null)"
@@ -238,6 +289,13 @@ else
     pass "malformed JSON -> 400 parse error"
   else
     fail "malformed JSON -> 400 parse error" "got $STATUS: $BODY"
+  fi
+
+  request "$TOKEN" '{"jsonrpc":"2.0","id":6,"method":"ping"}'
+  if [[ "$STATUS" == "404" && "$(jq_py 'd["error"]["code"]' <<<"$BODY")" == "-32601" ]]; then
+    pass "modern ping -> 404 method not found"
+  else
+    fail "modern ping -> 404 method not found" "got $STATUS: $BODY"
   fi
 
   request "$TOKEN" "" GET

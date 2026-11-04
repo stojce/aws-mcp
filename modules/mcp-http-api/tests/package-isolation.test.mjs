@@ -272,6 +272,26 @@ test('module packages remain isolated through intervening plans and saved-plan a
       },
     });
     assert.equal(modernPreflight.statusCode, 204);
+
+    const externalIssuer = 'https://identity.example.com/realms/app';
+    Object.assign(process.env, {
+      MCP_AUTHORIZATION_MODE: 'external', MCP_AUTHORIZATION_SERVER: externalIssuer,
+      MCP_CLIENT_ID: 'external-client', MCP_CLIENT_ID_CLAIM: 'azp',
+      MCP_ACCESS_TOKEN_CLAIM: JSON.stringify({ name: 'kind', value: 'access' }),
+    });
+    const { handler: externalHandler } = await import('./index.mjs?external');
+    const externalCall = modernEvent('tools/call', { name: tools[0].name, arguments: { count: 1 } });
+    externalCall.requestContext.authorizer.jwt = {
+      claims: { iss: externalIssuer, sub: 'external-user', azp: 'external-client', aud: resource },
+      scopes: ['mcp/read'],
+    };
+    assert.equal((await externalHandler(externalCall)).statusCode, 401);
+    assert.equal(calls.length, 3);
+    externalCall.requestContext.authorizer.jwt.claims.kind = 'access';
+    const externalResult = await externalHandler(externalCall);
+    assert.equal(externalResult.statusCode, 200);
+    assert.deepEqual(JSON.parse(externalResult.body).result.structuredContent, { owner: 'external-user' });
+    assert.deepEqual(calls[3].payload.identity, { sub: 'external-user', clientId: 'external-client' });
   `], { cwd: extractedPackage });
 
   const updated = await plan('updated.tfplan', '_updated');

@@ -312,6 +312,10 @@ export async function handleMessage(msg, ctx) {
   }
   if (kind === 'notification') return null;
 
+  const bodyVersion = msg.params?._meta?.[META.protocolVersion];
+  if (typeof bodyVersion === 'string' && bodyVersion !== protocolVersion) {
+    return rpcError(msg.id, ERR.headerMismatch, 'MCP-Protocol-Version must match params._meta protocolVersion');
+  }
   if (modern && !validRequestMetadata(msg.params)) {
     return rpcError(msg.id, ERR.invalidParams, 'Requests require valid protocolVersion and clientCapabilities in params._meta');
   }
