@@ -150,18 +150,19 @@ resource "aws_lambda_function" "mcp" {
 
   environment {
     variables = {
-      MCP_CLIENT_ID                   = local.mcp_client_id
-      MCP_REQUIRED_SCOPE              = local.full_scope
-      MCP_RESOURCE_URL                = local.mcp_url
-      MCP_RESOURCE_METADATA_URL       = local.resource_metadata_url
-      MCP_AUTHORIZATION_SERVER        = local.authorization_issuer
-      MCP_AUTHORIZATION_MODE          = local.authorization_mode
-      MCP_CLIENT_ID_CLAIM             = local.client_id_claim
-      MCP_ACCESS_TOKEN_CLAIM          = jsonencode(local.access_token_claim)
-      MCP_ALLOW_UNBOUND_ACCESS_TOKENS = tostring(var.allow_unbound_access_tokens)
-      MCP_ALLOWED_ORIGINS             = jsonencode(sort(tolist(var.allowed_origins)))
-      MCP_TOOL_TIMEOUT_MS             = tostring(local.tool_timeout_ms)
-      TOOL_BACKEND_ARN                = var.tool_backend_arn
+      MCP_CLIENT_ID                     = local.mcp_client_id
+      MCP_REQUIRED_SCOPE                = local.full_scope
+      MCP_RESOURCE_URL                  = local.mcp_url
+      MCP_RESOURCE_METADATA_URL         = local.resource_metadata_url
+      MCP_AUTHORIZATION_SERVER          = local.oauth_discovery_issuer
+      MCP_AUTHORIZATION_SERVER_METADATA = jsonencode(local.oauth_server_metadata)
+      MCP_AUTHORIZATION_MODE            = local.authorization_mode
+      MCP_CLIENT_ID_CLAIM               = local.client_id_claim
+      MCP_ACCESS_TOKEN_CLAIM            = jsonencode(local.access_token_claim)
+      MCP_ALLOW_UNBOUND_ACCESS_TOKENS   = tostring(var.allow_unbound_access_tokens)
+      MCP_ALLOWED_ORIGINS               = jsonencode(sort(tolist(var.allowed_origins)))
+      MCP_TOOL_TIMEOUT_MS               = tostring(local.tool_timeout_ms)
+      TOOL_BACKEND_ARN                  = var.tool_backend_arn
     }
   }
 
@@ -242,14 +243,23 @@ resource "aws_apigatewayv2_route" "resource_metadata" {
   authorization_type = "NONE"
 }
 
+resource "aws_apigatewayv2_route" "authorization_server_metadata" {
+  count = var.oauth_proxy_endpoints == null ? 0 : 1
+
+  api_id             = aws_apigatewayv2_api.mcp.id
+  route_key          = "GET /.well-known/oauth-authorization-server"
+  target             = "integrations/${aws_apigatewayv2_integration.mcp.id}"
+  authorization_type = "NONE"
+}
+
 # Explicit method routes take priority over ANY /mcp so preflight never needs a
 # bearer token. API Gateway handles CORS; the Lambda enforces the same policy.
 resource "aws_apigatewayv2_route" "preflight" {
-  for_each = length(var.allowed_origins) > 0 ? toset([
+  for_each = length(var.allowed_origins) > 0 ? toset(concat([
     "OPTIONS /mcp",
     "OPTIONS /.well-known/oauth-protected-resource/mcp",
     "OPTIONS /.well-known/oauth-protected-resource",
-  ]) : toset([])
+  ], var.oauth_proxy_endpoints == null ? [] : ["OPTIONS /.well-known/oauth-authorization-server"])) : toset([])
 
   api_id             = aws_apigatewayv2_api.mcp.id
   route_key          = each.value

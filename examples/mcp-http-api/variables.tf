@@ -16,7 +16,7 @@ variable "enable_password_auth_for_tests" {
 }
 
 variable "callback_urls" {
-  description = "Pre-registered authorization-code callbacks for the local login page and MCP Inspector. Match the host, port, and path used by your client."
+  description = "Pre-registered authorization-code callbacks for the local login page, MCP Inspector, Claude hosted connectors, and mcptest.io. Match the host, port, and path used by your client."
   type        = list(string)
   default = [
     "http://localhost:8080/callback",
@@ -24,7 +24,18 @@ variable "callback_urls" {
     "http://localhost:6274/oauth/callback/debug",
     "http://127.0.0.1:6274/oauth/callback",
     "http://127.0.0.1:6274/oauth/callback/debug",
+    "https://claude.ai/api/mcp/auth_callback",
+    "https://mcptest.io/oauth/callback",
   ]
+}
+
+variable "oauth_proxy_endpoints" {
+  description = "Optional OAuth endpoint overrides. Default null publishes S256 metadata pointing to public Cognito endpoints. Use local-oauth.tfvars.example to advertise the localhost helper for local clients."
+  type = object({
+    authorization_endpoint = string
+    token_endpoint         = string
+  })
+  default = null
 }
 
 variable "allowed_origins" {

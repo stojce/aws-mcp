@@ -50,6 +50,26 @@ variable "tool_backend_arn" {
   type        = string
 }
 
+variable "oauth_proxy_endpoints" {
+  description = "Optional Cognito or proxy endpoints using this module's public client. Publishes OAuth metadata at the MCP origin with S256 PKCE and code/refresh grants. The endpoints must support those capabilities. HTTP is allowed only on loopback hosts for local testing."
+  type = object({
+    authorization_endpoint = string
+    token_endpoint         = string
+  })
+  default = null
+
+  validation {
+    condition = var.oauth_proxy_endpoints == null ? true : (
+      var.external_authorization_server == null && alltrue([
+        for endpoint in [var.oauth_proxy_endpoints.authorization_endpoint, var.oauth_proxy_endpoints.token_endpoint] :
+        can(regex("^(https://[a-zA-Z0-9.-]+|http://(localhost|127\\.0\\.0\\.1|\\[::1\\]))(:[1-9][0-9]{0,4})?/[^?#@\\s]*$", endpoint)) &&
+        try(tonumber(regex(":([0-9]+)/", endpoint)[0]) <= 65535, true)
+      ])
+    )
+    error_message = "oauth_proxy_endpoints requires Cognito mode and HTTPS URLs (or HTTP loopback URLs) with paths, valid ports, and no credentials, query, or fragment."
+  }
+}
+
 variable "tools" {
   description = "MCP tools exposed on the endpoint. input_schema is a JSON Schema with type object (use jsonencode). Supports 2020-12 (default), draft-07, and x-mcp-header annotations on primitive properties; all schemas compile at Lambda startup."
   type = list(object({
@@ -185,9 +205,20 @@ locals {
   resource_metadata_url      = "${aws_apigatewayv2_api.mcp.api_endpoint}/.well-known/oauth-protected-resource/mcp"
   cognito_issuer             = var.user_pool_id == null ? null : "https://cognito-idp.${data.aws_region.current.region}.amazonaws.com/${var.user_pool_id}"
   authorization_issuer       = var.external_authorization_server == null ? local.cognito_issuer : var.external_authorization_server.issuer
-  authorization_mode         = var.external_authorization_server == null ? "cognito" : "external"
-  mcp_client_id              = var.external_authorization_server == null ? aws_cognito_user_pool_client.mcp[0].id : var.external_authorization_server.client_id
-  client_id_claim            = var.external_authorization_server == null ? "client_id" : var.external_authorization_server.client_id_claim
+  oauth_discovery_issuer     = var.oauth_proxy_endpoints == null ? local.authorization_issuer : trimsuffix(local.mcp_url, "/mcp")
+  oauth_server_metadata = var.oauth_proxy_endpoints == null ? null : {
+    issuer                                = local.oauth_discovery_issuer
+    authorization_endpoint                = var.oauth_proxy_endpoints.authorization_endpoint
+    token_endpoint                        = var.oauth_proxy_endpoints.token_endpoint
+    response_types_supported              = ["code"]
+    grant_types_supported                 = ["authorization_code", "refresh_token"]
+    token_endpoint_auth_methods_supported = ["none"]
+    code_challenge_methods_supported      = ["S256"]
+    scopes_supported                      = ["openid", "email", local.full_scope]
+  }
+  authorization_mode = var.external_authorization_server == null ? "cognito" : "external"
+  mcp_client_id      = var.external_authorization_server == null ? aws_cognito_user_pool_client.mcp[0].id : var.external_authorization_server.client_id
+  client_id_claim    = var.external_authorization_server == null ? "client_id" : var.external_authorization_server.client_id_claim
   access_token_claim = var.external_authorization_server == null ? {
     name = "token_use", value = "access"
   } : var.external_authorization_server.access_token_claim

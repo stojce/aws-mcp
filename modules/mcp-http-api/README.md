@@ -116,9 +116,46 @@ endpoint allows a gradual transition.
 The example Cognito pool's public discovery document was checked on 2026-11-04
 and omitted `code_challenge_methods_supported`. Strict MCP OAuth clients must
 refuse that discovery response even though Cognito supports S256 authorization.
-Use a compliant external server for those clients. The
+Use a compliant external server for those clients, or the optional local OAuth
+proxy described below for sandbox testing. The
 [protocol research](../../.scratch/mcp-on-aws/mcp-http-api-2026-07-28-protocol-research.md)
 records the source requirements and provider observation.
+
+## Configured OAuth discovery
+
+In Cognito mode, `oauth_proxy_endpoints` publishes RFC 8414 metadata for Cognito
+endpoints or an existing OAuth proxy. The example enables it for its public
+Cognito endpoints by default, so strict clients discover S256 support even
+though Cognito's own discovery document omits that field. The example's optional
+local helper supports these endpoints:
+
+```hcl
+oauth_proxy_endpoints = {
+  authorization_endpoint = "http://localhost:8080/authorize"
+  token_endpoint         = "http://localhost:8080/token"
+}
+```
+
+Protected-resource metadata then advertises the HTTPS MCP origin as
+`oauth_authorization_server_issuer`. Its public
+`/.well-known/oauth-authorization-server` document supplies both endpoints,
+S256 PKCE, the authorization-code and refresh grants, and public-client token
+authentication (`none`). The advertised issuer matches the metadata location so
+clients can discover the proxy without endpoint overrides. No registration
+endpoint or OIDC discovery document is published; clients still need the
+pre-registered `mcp_app_client_id`.
+
+This option publishes metadata; when using a proxy, deploy or run it separately. It must use
+the configured Cognito client, enforce its registered callbacks, and preserve
+PKCE and the MCP resource in code and refresh exchanges. HTTP URLs are limited to
+loopback hosts for local testing, and the token endpoint must be reachable from
+the MCP client. API Gateway continues to verify the Cognito
+`authorization_server_issuer`, resource audience, and scope; the backend receives
+the verified Cognito subject. Tokens are not reissued under the metadata issuer.
+
+The default is `null`, which keeps discovery directed at Cognito (or the configured
+external provider). This proxy option is specific to Cognito and cannot be
+combined with `external_authorization_server`.
 
 ## Authorization code and PKCE
 
@@ -140,8 +177,9 @@ and cannot be requested with `resource=mcp_url` in managed login.
 
 The initial 401 response advertises `resource_metadata_url` in `WWW-Authenticate`.
 That public metadata identifies `mcp_url` as the protected resource and
-`authorization_server_issuer` as its authorization server. Read the issuer's
-`/.well-known/openid-configuration` to find the authorization and token endpoints.
+`oauth_authorization_server_issuer` as its authorization server. Read the issuer's
+OAuth metadata (or Cognito's `/.well-known/openid-configuration` in direct mode)
+to find the authorization and token endpoints.
 The example also exposes these endpoints as Terraform outputs.
 
 The default requires an access token with `aud` equal to the exact `mcp_url`,
@@ -170,7 +208,7 @@ different identifiers and do not satisfy the default resource-audience check.
 
 3. On the callback, require the returned `state` to match the stored value before
    using the authorization `code`. Reject an error response or a mismatched state.
-   If `iss` is present, it must equal `authorization_server_issuer`. Require it
+   If `iss` is present, it must equal `oauth_authorization_server_issuer`. Require it
    when discovery advertises `authorization_response_iss_parameter_supported: true`.
 4. POST an `application/x-www-form-urlencoded` body to the token endpoint:
 

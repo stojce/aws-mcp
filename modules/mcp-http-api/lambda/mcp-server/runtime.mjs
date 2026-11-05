@@ -504,6 +504,11 @@ export async function handleHttpEvent(event, cfg) {
     }, { 'cache-control': 'no-store' });
   }
 
+  if (method === 'GET' && event?.routeKey === 'GET /.well-known/oauth-authorization-server') {
+    if (!cfg.authorizationServerMetadata) return respond(404, { error: 'not_found' });
+    return respond(200, cfg.authorizationServerMetadata, { 'cache-control': 'no-store' });
+  }
+
   const claims = event?.requestContext?.authorizer?.jwt?.claims;
   const auth = authorize(claims, { ...cfg, verifiedScopes: event?.requestContext?.authorizer?.jwt?.scopes });
   if (!auth.ok) {

@@ -6,7 +6,6 @@ This repository provisions authenticated AWS MCP endpoints with Terraform and No
 
 - `modules/mcp-gateway/`: AgentCore Gateway, Cognito configuration, tool targets, and the request interceptor.
 - `modules/mcp-http-api/`: API Gateway HTTP API alternative, MCP server Lambda, and runtime tests.
-- `examples/customer-assistant/` and `examples/mcp-http-api/`: deployable configurations; the former includes live integration tests.
 - `scripts/`: wire-level smoke checks. `docs/adr/` records architecture decisions; `docs/runbook-mcp-gateway.md` covers gateway operation. Consult `GLOSSARY.md` for terminology and `.scratch/mcp-on-aws/` for design tickets.
 
 ## Build, Test, and Development Commands
@@ -32,8 +31,6 @@ node --test modules/mcp-gateway/lambda/interceptor/index.test.js modules/mcp-htt
 ```
 
 Name tests `*.test.js` or `*.test.mjs`. Cover identity validation, denial paths, tool routing, and response behavior; no numerical coverage threshold is configured.
-
-Run live gateway suites with `node tests/run.js` from `examples/customer-assistant/`. Follow `tests/README.md` for credentials and endpoint configuration; these suites contact deployed AWS resources.
 
 ## Commit & Pull Request Guidelines
 

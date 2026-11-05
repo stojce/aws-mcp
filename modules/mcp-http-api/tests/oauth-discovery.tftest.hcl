@@ -40,6 +40,16 @@ run "resource_bound_discovery" {
   command = apply
 
   assert {
+    condition = (
+      output.oauth_authorization_server_issuer == output.authorization_server_issuer &&
+      output.authorization_server_metadata_url == null &&
+      length(aws_apigatewayv2_route.authorization_server_metadata) == 0 &&
+      aws_lambda_function.mcp.environment[0].variables.MCP_AUTHORIZATION_SERVER_METADATA == "null"
+    )
+    error_message = "Default discovery must continue to use the original issuer without a proxy metadata route."
+  }
+
+  assert {
     condition     = aws_apigatewayv2_authorizer.jwt.jwt_configuration[0].audience == toset([output.mcp_url])
     error_message = "The edge must require the canonical MCP resource audience by default."
   }
@@ -86,4 +96,71 @@ run "explicit_legacy_compatibility" {
     ])
     error_message = "Legacy compatibility must add client_id fallback without dropping resource binding."
   }
+}
+
+run "local_oauth_proxy_is_discoverable_and_keeps_cognito_verification" {
+  command = apply
+
+  variables {
+    allowed_origins = ["http://localhost:6274"]
+    oauth_proxy_endpoints = {
+      authorization_endpoint = "http://localhost:8080/authorize"
+      token_endpoint         = "http://localhost:8080/token"
+    }
+  }
+
+  assert {
+    condition = (
+      output.oauth_authorization_server_issuer == "https://mcp.example.cloudfront.net" &&
+      output.authorization_server_metadata_url == "https://mcp.example.cloudfront.net/.well-known/oauth-authorization-server" &&
+      aws_lambda_function.mcp.environment[0].variables.MCP_AUTHORIZATION_SERVER == output.oauth_authorization_server_issuer &&
+      jsondecode(aws_lambda_function.mcp.environment[0].variables.MCP_AUTHORIZATION_SERVER_METADATA) == {
+        issuer                                = output.oauth_authorization_server_issuer
+        authorization_endpoint                = "http://localhost:8080/authorize"
+        token_endpoint                        = "http://localhost:8080/token"
+        response_types_supported              = ["code"]
+        grant_types_supported                 = ["authorization_code", "refresh_token"]
+        token_endpoint_auth_methods_supported = ["none"]
+        code_challenge_methods_supported      = ["S256"]
+        scopes_supported                      = ["openid", "email", output.required_scope]
+      }
+    )
+    error_message = "Clients must discover the local OAuth endpoints and public PKCE client capabilities under a matching HTTPS metadata issuer."
+  }
+
+  assert {
+    condition = (
+      aws_apigatewayv2_route.authorization_server_metadata[0].route_key == "GET /.well-known/oauth-authorization-server" &&
+      aws_apigatewayv2_route.authorization_server_metadata[0].authorization_type == "NONE" &&
+      aws_apigatewayv2_route.preflight["OPTIONS /.well-known/oauth-authorization-server"].authorization_type == "NONE" &&
+      aws_apigatewayv2_authorizer.jwt.jwt_configuration[0].issuer == "https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_example" &&
+      output.authorization_server_issuer == aws_apigatewayv2_authorizer.jwt.jwt_configuration[0].issuer &&
+      aws_apigatewayv2_authorizer.jwt.jwt_configuration[0].audience == toset([output.mcp_url]) &&
+      aws_apigatewayv2_route.mcp.authorization_type == "JWT" &&
+      aws_apigatewayv2_route.mcp.authorization_scopes == toset([output.required_scope])
+    )
+    error_message = "Only discovery is public; the edge must still verify Cognito tokens, resource audience, and the required scope."
+  }
+}
+
+run "non_loopback_http_proxy_is_rejected" {
+  command = plan
+  variables {
+    oauth_proxy_endpoints = {
+      authorization_endpoint = "http://proxy.example.com/authorize"
+      token_endpoint         = "http://proxy.example.com/token"
+    }
+  }
+  expect_failures = [var.oauth_proxy_endpoints]
+}
+
+run "proxy_endpoints_with_credentials_are_rejected" {
+  command = plan
+  variables {
+    oauth_proxy_endpoints = {
+      authorization_endpoint = "https://user@proxy.example.com/authorize"
+      token_endpoint         = "https://proxy.example.com/token"
+    }
+  }
+  expect_failures = [var.oauth_proxy_endpoints]
 }

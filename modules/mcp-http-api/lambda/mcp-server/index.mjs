@@ -18,6 +18,7 @@ const cfg = {
   resourceUrl: process.env.MCP_RESOURCE_URL,
   resourceMetadataUrl: process.env.MCP_RESOURCE_METADATA_URL,
   authorizationServer: process.env.MCP_AUTHORIZATION_SERVER,
+  authorizationServerMetadata: JSON.parse(process.env.MCP_AUTHORIZATION_SERVER_METADATA ?? 'null'),
   authorizationMode: process.env.MCP_AUTHORIZATION_MODE ?? 'cognito',
   clientIdClaim: process.env.MCP_CLIENT_ID_CLAIM ?? 'client_id',
   accessTokenClaim: JSON.parse(process.env.MCP_ACCESS_TOKEN_CLAIM ?? 'null'),

@@ -15,6 +15,10 @@ export function loadConfiguration() {
     throw new Error('Cannot read Terraform outputs. Deploy examples/mcp-http-api with terraform apply first.');
   }
 
+  return configurationFromOutputs(outputs);
+}
+
+export function configurationFromOutputs(outputs) {
   const read = (name) => {
     const value = outputs[name]?.value;
     if (typeof value !== 'string' || !value) {
@@ -28,8 +32,10 @@ export function loadConfiguration() {
     clientId: read('mcp_app_client_id'),
     scope: read('required_scope'),
     issuer,
-    authorizationEndpoint: read('authorization_endpoint'),
-    tokenEndpoint: read('token_endpoint'),
+    // New public outputs may point back to this helper. Always forward to
+    // Cognito; retain compatibility with states from before proxy discovery.
+    authorizationEndpoint: read(outputs.cognito_authorization_endpoint ? 'cognito_authorization_endpoint' : 'authorization_endpoint'),
+    tokenEndpoint: read(outputs.cognito_token_endpoint ? 'cognito_token_endpoint' : 'token_endpoint'),
     userPoolId: read('user_pool_id'),
     region: outputs.region?.value ?? new URL(issuer).hostname.split('.')[1],
     accountId: outputs.account_id?.value,

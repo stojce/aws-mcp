@@ -27,6 +27,15 @@ locals {
   name = var.name
 
   test_users = var.test_users
+
+  cognito_authorization_endpoint = "https://${aws_cognito_user_pool_domain.example.domain}.auth.${var.region}.amazoncognito.com/oauth2/authorize"
+  cognito_token_endpoint         = "https://${aws_cognito_user_pool_domain.example.domain}.auth.${var.region}.amazoncognito.com/oauth2/token"
+  # Cognito supports S256 but omits it from its discovery document. Publish our
+  # OAuth metadata for the same public endpoints by default.
+  oauth_endpoints = var.oauth_proxy_endpoints == null ? {
+    authorization_endpoint = local.cognito_authorization_endpoint
+    token_endpoint         = local.cognito_token_endpoint
+  } : var.oauth_proxy_endpoints
 }
 
 # ── Example-only identity: a user pool that stands in for the app's pool ──────
@@ -184,6 +193,8 @@ module "mcp" {
 
   callback_urls   = var.callback_urls
   allowed_origins = var.allowed_origins
+
+  oauth_proxy_endpoints = local.oauth_endpoints
 
   enable_password_auth_for_tests = var.enable_password_auth_for_tests
 

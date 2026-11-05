@@ -19,11 +19,29 @@ output "authorization_server_issuer" {
 }
 
 output "authorization_endpoint" {
-  value = "https://${aws_cognito_user_pool_domain.example.domain}.auth.${var.region}.amazoncognito.com/oauth2/authorize"
+  value = local.oauth_endpoints.authorization_endpoint
 }
 
 output "token_endpoint" {
-  value = "https://${aws_cognito_user_pool_domain.example.domain}.auth.${var.region}.amazoncognito.com/oauth2/token"
+  value = local.oauth_endpoints.token_endpoint
+}
+
+output "oauth_authorization_server_issuer" {
+  value = module.mcp.oauth_authorization_server_issuer
+}
+
+output "authorization_server_metadata_url" {
+  value = module.mcp.authorization_server_metadata_url
+}
+
+output "cognito_authorization_endpoint" {
+  description = "Upstream Cognito endpoint used by the local login helper."
+  value       = local.cognito_authorization_endpoint
+}
+
+output "cognito_token_endpoint" {
+  description = "Upstream Cognito endpoint used by the local login helper."
+  value       = local.cognito_token_endpoint
 }
 
 output "user_pool_id" {

@@ -9,8 +9,18 @@ output "resource_metadata_url" {
 }
 
 output "authorization_server_issuer" {
-  description = "Configured OAuth/OIDC issuer, advertised in protected-resource metadata."
+  description = "Trusted access-token issuer used by the native JWT authorizer. With an OAuth proxy, discovery advertises oauth_authorization_server_issuer instead."
   value       = local.authorization_issuer
+}
+
+output "oauth_authorization_server_issuer" {
+  description = "Issuer advertised in protected-resource metadata: the configured provider, or the MCP origin when OAuth proxy endpoints are enabled."
+  value       = local.oauth_discovery_issuer
+}
+
+output "authorization_server_metadata_url" {
+  description = "Public OAuth proxy metadata URL; null when clients discover the original provider directly."
+  value       = var.oauth_proxy_endpoints == null ? null : "${local.oauth_discovery_issuer}/.well-known/oauth-authorization-server"
 }
 
 output "mcp_app_client_id" {
