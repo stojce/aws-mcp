@@ -75,12 +75,6 @@ Move `user_pool_id`, `callback_urls`, `logout_urls`, `resource_server_identifier
 Add this move in the calling root configuration, adjusting the module names if
 needed. The [example](../../examples/mcp-http-api/moved.tf) includes it:
 
-```hcl
-moved {
-  from = module.mcp.module.cognito[0]
-  to   = module.cognito
-}
-```
 
 The MCP module retains historical moves from both the original uncounted
 resources and the later `[0]` resource addresses. They lead into this root-level
