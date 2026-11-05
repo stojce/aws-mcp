@@ -26,6 +26,7 @@ variable "callback_urls" {
     "http://127.0.0.1:6274/oauth/callback/debug",
     "https://claude.ai/api/mcp/auth_callback",
     "https://mcptest.io/oauth/callback",
+    "https://chatgpt.com/connector/oauth/w5eXLFkBjXmB",
   ]
 }
 
@@ -39,9 +40,9 @@ variable "oauth_proxy_endpoints" {
 }
 
 variable "allowed_origins" {
-  description = "Exact browser origins allowed to call MCP, for example http://localhost:8080. Native clients omit Origin and need no allowlist entry."
+  description = "Exact browser origins allowed to call MCP. Defaults support MCP Inspector and mcptest.io. Register OAuth callbacks separately; native clients need no origin entry."
   type        = set(string)
-  default     = ["http://localhost:6274", "http://127.0.0.1:6274"]
+  default     = ["http://localhost:6274", "http://127.0.0.1:6274", "https://mcptest.io"]
 }
 
 variable "test_users" {

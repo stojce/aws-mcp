@@ -11,6 +11,7 @@ const metadata = {
   grant_types_supported: ['authorization_code', 'refresh_token'],
   token_endpoint_auth_methods_supported: ['none'],
   code_challenge_methods_supported: ['S256'],
+  client_id_metadata_document_supported: false,
   scopes_supported: ['openid', 'email', `${issuer}/mcp/read`],
 };
 const cfg = {
@@ -69,6 +70,8 @@ test('strict clients discover S256 with public Cognito endpoints under a matchin
   assert.equal(discovered.authorization_endpoint, publicMetadata.authorization_endpoint);
   assert.equal(discovered.token_endpoint, publicMetadata.token_endpoint);
   assert.deepEqual(discovered.token_endpoint_auth_methods_supported, ['none']);
+  assert.equal(discovered.client_id_metadata_document_supported, false);
+  assert.equal(Object.hasOwn(discovered, 'registration_endpoint'), false);
 });
 
 test('proxy discovery does not make MCP calls or other paths public', async () => {

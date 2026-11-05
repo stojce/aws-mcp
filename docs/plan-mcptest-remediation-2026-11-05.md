@@ -3,7 +3,35 @@
 Proposed on 2026-11-05 for `https://d3fnojefdq9ufq.cloudfront.net/mcp`.
 Source: [mcptest report](../mcptest-d3fnojefdq9ufq.cloudfront.net-report.md), generated at 12:42 UTC by mcptest 1.0.0 (`0401f688eaa0689efa1d1bac9e35b4dbfd062585`). Baseline: **86/110 (78.18%)**.
 
-Fix direct browser access and the bookings input contract first. Then collect direct transport and OAuth evidence for the compatibility findings, measure performance again, and rerun the evaluation. Implementation should build on the current working tree, which already contains pending OAuth and protocol changes.
+**Implementation status — prepared and tested on 2026-11-05**
+
+The user requested repository changes and local tests without deployment. The
+fixable configuration and schema changes are implemented, with verification
+tools for the observations that require a deployed endpoint. The original
+report and deployed score remain unchanged. A live AWS Terraform plan was not
+produced; the account's SSO session had expired and the user selected local
+preparation and testing.
+
+| Work | Local result | Remaining live verification |
+| --- | --- | --- |
+| Browser access | mcptest's exact origin is in the example defaults; CORS, public discovery, and denial regressions pass | Apply the configuration, then connect directly from mcptest's browser |
+| Tool inputs | Undeclared properties are rejected and `status` is described; smoke checks catch both regressions | Confirm the published tools/list schema and valid/invalid calls after deployment |
+| OAuth registration and callbacks | Metadata explicitly declares no Client ID Metadata Documents; setup and host verification limits are documented; existing callback tests pass | Verify each actual host's callback, sign-in, and registration mode |
+| Statelessness and optional capabilities | Independent runtime instances keep concurrent users and protocol versions separate; smoke checks verify session-header absence and method-not-found responses | Capture direct endpoint observations for the next report |
+| Refresh tokens | A verifier exercises two rotations, binding/identity, tool access, and retired-token rejection; local regressions and private token persistence pass | Run with a fresh authorization-code token response against the intended provider |
+| Performance | Direct tools/list sample counts and p50/p95 reporting are available | Measure deployed performance and mcptest negotiation; no latency gain is claimed locally |
+
+Validation passed with Node.js 22.23.4 and Terraform 1.17.1: **117 Node tests**, the
+separate **package-isolation test**, **44 module Terraform tests**, **2 example
+Terraform tests**, both Terraform validations, recursive formatting, and shell
+syntax. Terraform tests use mocked providers; packaging uses local archive
+plans. A pre-existing three-line alignment issue in the gateway variables was
+formatted so the repository-wide check passes.
+
+Reproduction and operational commands are in the
+[example README](../examples/mcp-http-api/README.md#local-verification).
+
+The original plan below prioritizes direct browser access and the bookings input contract, followed by transport/OAuth evidence, performance measurements, and a fresh evaluation. It was written against the OAuth and protocol changes already present in the workspace.
 
 **Evidence collected for this plan**
 
@@ -19,7 +47,7 @@ curl -sS --max-time 15 -i -X OPTIONS \
 
 Result: **HTTP 403**, `{"error":"origin_not_allowed"}`, with no `Access-Control-Allow-Origin`. Changing only Origin to `http://localhost:6274` returns **HTTP 204**, the matching allowed origin, and all six requested headers. An unauthenticated POST from that allowed origin returns **HTTP 401** and exposes `WWW-Authenticate`. These observations identify origin configuration as the immediate cause; the required modern request headers already work for an allowed origin.
 
-The example's `allowed_origins` defaults contain only the two Inspector loopback origins. Its callbacks already include `https://mcptest.io/oauth/callback`; callback registration does not grant browser access.
+At baseline, the example's `allowed_origins` defaults contained only the two Inspector loopback origins. Its callbacks already included `https://mcptest.io/oauth/callback`; callback registration does not grant browser access.
 
 Public authorization metadata advertises `authorization_code`, `refresh_token`, S256 PKCE, and public-client token authentication. Both `registration_endpoint` and `client_id_metadata_document_supported` are absent. Live token issuance, refresh, and individual host login flows were not exercised while preparing this plan.
 
@@ -139,6 +167,6 @@ If mcptest still labels sessions or registration unknown despite direct evidence
 
 Expected score effect: restoring Web Client Accessibility from 0/15 to 15/15 would produce **101/110 (91.82%)** if the other scores remain unchanged. Schema improvements address the separate tool-surface findings. The remaining six capability points represent optional resources/prompts functionality, and the remaining three performance points depend on fresh measurements. A perfect score is not the completion criterion.
 
-Completion means the confirmed browser/schema defects are fixed, direct tests and required regression checks pass, and every compatibility unknown has evidence or a clearly stated reason it cannot yet be verified. Implementing and deploying these changes, host sign-ins, and authenticated refresh checks are subsequent work; this document records the plan and the baseline checks actually performed.
+Completion of live remediation means the confirmed browser/schema defects are deployed, direct tests and required regression checks pass, and every compatibility unknown has evidence or a clearly stated reason it cannot yet be verified. Implementation and local validation are complete as recorded above. Deployment, host sign-ins, authenticated provider refresh checks, and a fresh evaluation remain deferred at the user's request.
 
 References: [MCP 2026 HTTP transport](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/3c4d91b7e832d9b74338d56eed03403ccc662123/docs/specification/2026-07-28/basic/transports/streamable-http.mdx), [MCP client registration](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/3c4d91b7e832d9b74338d56eed03403ccc662123/docs/specification/2026-07-28/basic/authorization/client-registration.mdx), and the repository's [protocol research](../.scratch/mcp-on-aws/mcp-http-api-2026-07-28-protocol-research.md).

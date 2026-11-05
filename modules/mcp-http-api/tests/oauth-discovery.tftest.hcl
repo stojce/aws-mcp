@@ -122,6 +122,7 @@ run "local_oauth_proxy_is_discoverable_and_keeps_cognito_verification" {
         grant_types_supported                 = ["authorization_code", "refresh_token"]
         token_endpoint_auth_methods_supported = ["none"]
         code_challenge_methods_supported      = ["S256"]
+        client_id_metadata_document_supported = false
         scopes_supported                      = ["openid", "email", output.required_scope]
       }
     )

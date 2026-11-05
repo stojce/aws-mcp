@@ -36,6 +36,7 @@ run "hosted_clients_use_public_cognito_endpoints_and_s256_discovery" {
     condition = (
       contains(output.callback_urls, "https://claude.ai/api/mcp/auth_callback") &&
       contains(output.callback_urls, "https://mcptest.io/oauth/callback") &&
+      contains(var.allowed_origins, "https://mcptest.io") &&
       output.authorization_endpoint == output.cognito_authorization_endpoint &&
       output.token_endpoint == output.cognito_token_endpoint &&
       startswith(output.token_endpoint, "https://") &&
@@ -43,7 +44,7 @@ run "hosted_clients_use_public_cognito_endpoints_and_s256_discovery" {
       output.authorization_server_metadata_url == "https://mcp.example.cloudfront.net/.well-known/oauth-authorization-server" &&
       output.authorization_server_issuer == "https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_example"
     )
-    error_message = "Hosted clients need registered callbacks and module-managed S256 discovery pointing to public Cognito endpoints while token verification trusts Cognito."
+    error_message = "Hosted clients need registered callbacks, direct browser access for mcptest, and public S256 discovery while token verification trusts Cognito."
   }
 }
 

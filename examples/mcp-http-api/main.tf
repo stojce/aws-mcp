@@ -205,9 +205,14 @@ module "mcp" {
       input_schema = jsonencode({
         type = "object"
         properties = {
-          status = { type = "string", enum = ["confirmed", "cancelled", "past"] }
+          status = {
+            type        = "string"
+            enum        = ["confirmed", "cancelled", "past"]
+            description = "Filter bookings by status. Omit to return bookings of every status for the signed-in user."
+          }
         }
-        required = []
+        required             = []
+        additionalProperties = false
       })
     },
   ]

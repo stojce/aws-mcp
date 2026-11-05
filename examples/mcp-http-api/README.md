@@ -19,7 +19,9 @@ and MCP Inspector's callbacks at `http://localhost:6274/oauth/callback` and
 using `127.0.0.1`. Inspector's two loopback origins are also allowed by CORS.
 Claude hosted connectors use the registered callback
 `https://claude.ai/api/mcp/auth_callback`.
-mcptest.io uses `https://mcptest.io/oauth/callback`.
+mcptest.io uses `https://mcptest.io/oauth/callback`, and its browser origin
+`https://mcptest.io` is allowed by default. An override of `allowed_origins`
+replaces the defaults; include every browser origin you intend to support.
 For another client, configure its exact callback and browser origin:
 
 ```hcl
@@ -61,11 +63,33 @@ After applying this callback change, start a new connection attempt; the old
 
 For [mcptest.io](https://mcptest.io/learn/mcp-oauth-2-1-reference#pkce-s256-rfc-7636),
 use `mcp_app_client_id` when prompted for a pre-registered public client. Its exact
-callback, `https://mcptest.io/oauth/callback`, is registered by default. After
-applying the metadata change, start a fresh OAuth attempt so cached Cognito
-discovery is not reused. A proxy-based transport diagnostic marked **Not checked**
-does not establish a CORS failure. This server is stateless and does not issue
-`Mcp-Session-Id`.
+callback, `https://mcptest.io/oauth/callback`, and browser origin,
+`https://mcptest.io`, are configured by default. After applying changes, start a
+fresh OAuth attempt so cached discovery and preflight results are not reused.
+Metadata explicitly declares `client_id_metadata_document_supported: false`;
+use the pre-registered client ID and an empty secret. A proxy-based transport
+diagnostic marked **Not checked** does not establish a missing-header defect.
+This server is stateless and does not issue `Mcp-Session-Id`.
+
+The registration mode applies to all clients. Register callbacks exactly as
+shown by each client, and configure browser origins separately. The following
+table records configuration and verification limits for the report fixes; it
+does not infer host compatibility from mcptest's successful connection.
+
+| Client | Callback configuration | Verification for these changes |
+| --- | --- | --- |
+| mcptest 1.0.0 | `https://mcptest.io/oauth/callback`; origin `https://mcptest.io` | Local CORS/protocol regressions pass; a fresh direct-browser login and refresh await deployment |
+| MCP Inspector | The four registered localhost/127.0.0.1 callbacks on port 6274 | Local login and token-proxy tests pass; actual Inspector workflow needs a fresh live check |
+| Claude hosted connector | `https://claude.ai/api/mcp/auth_callback` is in the defaults | Connector login and refresh have not been verified for these changes |
+| ChatGPT | Register the exact callback displayed for this connector | Connector configuration and live verification are still needed |
+| Cursor | Register the installed version's exact callback; use a fixed port when available | Client configuration and live verification are still needed |
+| VS Code Copilot | Register the configured client's exact callback | Client configuration and live verification are still needed |
+| Generic SDK | Choose and record SDK/version/runtime and its exact callback; allow its browser origin if applicable | Client configuration and live verification are still needed |
+
+Resources, resource templates, prompts, tasks, subscriptions, sampling, and
+elicitation are not used by this tool-only server. Discovery advertises tools
+with `listChanged: false`; unimplemented methods return method-not-found.
+Their absence is optional functionality, not a failed authorization flow.
 
 For a client that runs on your machine and needs to discover the local helper,
 the optional `local-oauth.tfvars.example` contains:
@@ -236,20 +260,31 @@ scope. Save tokens outside the checkout with permissions restricted to your user
 
 ```bash
 ./scripts/smoke.sh --url "$MCP_URL" --client-id "$MCP_CLIENT_ID" \
-  --scope "$MCP_SCOPE" --token-file /tmp/mcp-access.token
+  --scope "$MCP_SCOPE" --token-file /tmp/mcp-access.token --origin https://mcptest.io
 ```
 
 The smoke client checks resource audience locally, sends
 `MCP-Protocol-Version: 2026-07-28`, matching method/name headers, and required
-per-request metadata. It verifies `server/discover`, tool discovery, and
-user-scoped calls. API Gateway performs JWT signature verification.
+per-request metadata. It checks public preflight, readable OAuth discovery,
+schema constraints and property descriptions, user-scoped calls, stateless
+modern and legacy requests, and the unimplemented optional methods. API Gateway
+performs JWT signature verification. Logs contain assertion names instead of
+token claims or response bodies.
 
-The local proxy metadata advertises the S256 PKCE enforced by the helper. Direct
-Cognito discovery omits `code_challenge_methods_supported`, which strict modern
-MCP OAuth clients require. For clients that cannot use the local helper, configure the
-module's [external authorization server mode](../../modules/mcp-http-api/README.md#external-authorization-servers)
-with a compliant provider. This sandbox example provisions Cognito; the module
-also works without a user pool when `external_authorization_server` is set.
+Use `--other-token-file /tmp/mcp-other-access.token` with a different sandbox
+user to check separate booking results. Add `--samples 30` for direct tools/list
+p50/p95 measurements; these include network time and do not classify cold starts.
+The script uses curl, so browser CORS enforcement and mcptest negotiation timing
+still need a direct-browser evaluation after deployment. Omit `--origin` to test
+a native client; use `--negative-only --origin https://mcptest.io` for public
+CORS/discovery and denial checks without a valid token.
+
+The module-managed metadata advertises Cognito's S256 support and points to
+public Cognito endpoints by default. Cognito's own discovery omits that field.
+The optional local helper has separate endpoints for clients on your machine.
+The module also supports an
+[external authorization server](../../modules/mcp-http-api/README.md#external-authorization-servers)
+with its own registration and discovery contract.
 The smoke client accepts `--authorization-mode external --client-id-claim azp`
 for a provider using `azp`, along with the external endpoint, client ID, scope,
 and token-file flags.
@@ -265,21 +300,49 @@ ID, the current refresh token, and the same resource. Replace the returned refre
 token after every successful refresh. Rotation is enabled with a five-second retry
 grace period and a fixed 30-day lifetime from the original sign-in.
 
+To verify rotation and continued MCP access, save the complete authorization-code
+token response (`access_token` and `refresh_token`) in a private JSON file outside
+the checkout. With a fresh sandbox session, run from this example directory:
+
+```bash
+SMOKE_MCP_URL="$MCP_URL" \
+SMOKE_CLIENT_ID="$MCP_CLIENT_ID" \
+SMOKE_REQUIRED_SCOPE="$MCP_SCOPE" \
+SMOKE_TOKEN_ENDPOINT="$(terraform output -raw token_endpoint)" \
+SMOKE_TOKENS_FILE=/tmp/mcp-tokens.json \
+node scripts/verify-refresh.mjs
+```
+
+This performs two refreshes, verifies the issuer/subject/client/resource/scope
+and successful tool calls, waits beyond the five-second grace period, and checks
+that the retired refresh token is rejected. Each successful token response
+atomically replaces the same JSON file with owner-only permissions, including
+when a later check fails. Use its latest tokens for subsequent requests. The
+checker prints no credentials or provider response bodies; its success proves
+the tested token flow, not another host's login or callback behavior.
+
 ## Local verification
 
 Run from the repository root with Node.js 22 and Terraform 1.9+:
 
 ```bash
 node --test modules/mcp-gateway/lambda/interceptor/index.test.js modules/mcp-http-api/lambda/mcp-server/*.test.mjs
-node --test examples/mcp-http-api/login/login.test.mjs
+node --test examples/mcp-http-api/login/*.test.mjs examples/mcp-http-api/scripts/*.test.mjs
 terraform -chdir=modules/mcp-http-api test
+terraform -chdir=examples/mcp-http-api test
 node --test modules/mcp-http-api/tests/package-isolation.test.mjs
+terraform -chdir=modules/mcp-http-api validate
 terraform -chdir=examples/mcp-http-api validate
+terraform fmt -check -recursive
 bash -n examples/mcp-http-api/scripts/smoke.sh
 ```
 
 Terraform tests mock AWS and deploy no resources. The archive regression uses
-local data-source plans and saved-plan apply. See the
+local data-source plans and saved-plan apply. Smoke tests run the real MCP
+runtime behind a loopback-only fixture with a simulated native JWT boundary;
+refresh tests simulate the OAuth provider and exercise real MCP tool dispatch.
+They cover denial paths and deliberately broken CORS, schema, session, and
+identity behavior. See the
 [review report](../../docs/review-mcp-http-api-2026-11-03.md) for recorded results.
 
 ## Live verification history
@@ -305,9 +368,16 @@ captured the callback without running Inspector's UI workflow. Browser CORS
 through API Gateway/CloudFront remains unverified; the successful MCP requests
 used a Node.js HTTP client. Local verification passed 9 login tests, 90 existing
 runtime tests, Terraform example validation, and the responsive layout checks.
-The repository-wide formatting check still reports the unchanged
+At that time, the repository-wide formatting check reported the then-existing
 `examples/customer-assistant/variables.tf` and `modules/mcp-gateway/variables.tf`;
-the changed example files pass formatting.
+the changed example files passed formatting.
+
+On 2026-11-05, the report fixes and additional verification scripts passed local
+regression tests, mocked Terraform tests, validation, and recursive formatting.
+The [implementation record](../../docs/plan-mcptest-remediation-2026-11-05.md)
+lists the results and remaining live checks. Deployment was deferred at the
+user's request; this does not establish a new mcptest score or fresh hosted-client
+compatibility results.
 
 ## Notes
 

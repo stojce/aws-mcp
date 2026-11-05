@@ -51,8 +51,8 @@ variable "targets" {
 }
 
 locals {
-  scope_prefix   = "mcp"
-  gateway_name   = "${var.name}-mcp-gateway"
-  client_name    = "${var.name}-mcp-app-client"
+  scope_prefix         = "mcp"
+  gateway_name         = "${var.name}-mcp-gateway"
+  client_name          = "${var.name}-mcp-app-client"
   resource_server_name = "${var.name}-mcp"
 }

@@ -49,7 +49,7 @@ module "mcp" {
   tools = [{
     name         = "get_my_bookings"
     description  = "List the signed-in user's bookings."
-    input_schema = jsonencode({ type = "object", properties = {}, required = [] })
+    input_schema = jsonencode({ type = "object", properties = {}, required = [], additionalProperties = false })
   }]
 }
 ```
@@ -142,8 +142,9 @@ Protected-resource metadata then advertises the HTTPS MCP origin as
 S256 PKCE, the authorization-code and refresh grants, and public-client token
 authentication (`none`). The advertised issuer matches the metadata location so
 clients can discover the proxy without endpoint overrides. No registration
-endpoint or OIDC discovery document is published; clients still need the
-pre-registered `mcp_app_client_id`.
+endpoint or OIDC discovery document is published. Metadata explicitly declares
+`client_id_metadata_document_supported: false`; clients use the pre-registered
+`mcp_app_client_id` with an empty secret.
 
 This option publishes metadata; when using a proxy, deploy or run it separately. It must use
 the configured Cognito client, enforce its registered callbacks, and preserve

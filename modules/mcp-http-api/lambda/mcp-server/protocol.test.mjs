@@ -329,6 +329,34 @@ test('2026-07-28: protocol session and event replay headers are ignored', async 
   }
 });
 
+test('independent runtime instances keep concurrent users and protocol versions separate', async () => {
+  const runtimes = await Promise.all([0, 1].map(index => import(`./runtime.mjs?independent=${index}`)));
+  const context = {
+    ...cfg,
+    invokeTool: async ({ identity }) => {
+      await new Promise(resolve => setImmediate(resolve));
+      return { owner: identity.sub };
+    },
+  };
+  const cases = [
+    ['alice', VERSION], ['bob', '2025-06-18'], ['bob', VERSION], ['alice', '2025-06-18'],
+  ];
+  const responses = await Promise.all(cases.map(async ([sub, version], index) => {
+    const msg = version === VERSION ? toolCall({ since: '2026-01-01' }) : {
+      jsonrpc: '2.0', id: index, method: 'tools/call',
+      params: { name: 'get_my_bookings', arguments: { since: '2026-01-01' } },
+    };
+    const request = event(msg);
+    request.headers['MCP-Protocol-Version'] = version;
+    request.requestContext.authorizer.jwt.claims = { ...claims, sub };
+    const response = await runtimes[index % 2].handleHttpEvent(request, context);
+    assert.equal(response.statusCode, 200);
+    assert.equal(Object.keys(response.headers).some(name => name.toLowerCase() === 'mcp-session-id'), false);
+    return JSON.parse(bodyOf(response).result.content[0].text).owner;
+  }));
+  assert.deepEqual(responses, cases.map(([sub]) => sub));
+});
+
 test('2026-07-28: backend failures and deadlines retain complete tool-error envelopes', async () => {
   const msg = toolCall({ since: 'today' });
   const failure = await handleHttpEvent(event(msg), {
