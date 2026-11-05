@@ -22,44 +22,16 @@ mock_provider "aws" {
 mock_provider "archive" {}
 
 variables {
-  name             = "mcp-http-test"
-  user_pool_id     = "eu-west-1_example"
+  name = "mcp-http-test"
+  cognito_authorization_server = {
+    issuer                     = "https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_example"
+    client_id                  = "mcp-client"
+    required_scope             = "https://mcp.example.cloudfront.net/mcp/read"
+    resource_server_identifier = "https://mcp.example.cloudfront.net/mcp"
+  }
   tool_backend_arn = "arn:aws:lambda:eu-west-1:123456789012:function:backend"
   server_name      = "http-test"
-  callback_urls    = ["http://localhost:8080/callback"]
   tools            = []
-}
-
-run "public_client_rotates_refresh_tokens" {
-  command = apply
-
-  assert {
-    condition = (
-      !aws_cognito_user_pool_client.mcp[0].generate_secret &&
-      aws_cognito_user_pool_client.mcp[0].enable_token_revocation &&
-      length(aws_cognito_user_pool_client.mcp[0].refresh_token_rotation) == 1 &&
-      try(aws_cognito_user_pool_client.mcp[0].refresh_token_rotation[0].feature, "") == "ENABLED" &&
-      try(aws_cognito_user_pool_client.mcp[0].refresh_token_rotation[0].retry_grace_period_seconds, -1) == 5 &&
-      !contains(aws_cognito_user_pool_client.mcp[0].explicit_auth_flows, "ALLOW_REFRESH_TOKEN_AUTH") &&
-      !contains(aws_cognito_user_pool_client.mcp[0].explicit_auth_flows, "ALLOW_USER_PASSWORD_AUTH")
-    )
-    error_message = "The public OAuth client must rotate refresh tokens without re-enabling password or legacy refresh authentication."
-  }
-}
-
-run "sandbox_password_auth_keeps_rotation" {
-  command = apply
-  variables {
-    enable_password_auth_for_tests = true
-  }
-  assert {
-    condition = (
-      contains(aws_cognito_user_pool_client.mcp[0].explicit_auth_flows, "ALLOW_USER_PASSWORD_AUTH") &&
-      !contains(aws_cognito_user_pool_client.mcp[0].explicit_auth_flows, "ALLOW_REFRESH_TOKEN_AUTH") &&
-      try(aws_cognito_user_pool_client.mcp[0].refresh_token_rotation[0].feature, "") == "ENABLED"
-    )
-    error_message = "Test password authentication must remain opt-in and compatible with refresh-token rotation."
-  }
 }
 
 run "native_defaults_keep_browser_access_closed" {

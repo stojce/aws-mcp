@@ -3,16 +3,26 @@ variable "name" {
   type        = string
 }
 
-variable "user_pool_id" {
-  description = "Existing Cognito User Pool id. Required for Cognito mode; omit when external_authorization_server is configured."
-  type        = string
-  default     = null
+variable "cognito_authorization_server" {
+  description = "Existing Cognito issuer, public client, and scope. Pass module.cognito.authorization_server from the separately provisioned Cognito module, or configure external_authorization_server instead."
+  type = object({
+    issuer                     = string
+    client_id                  = string
+    required_scope             = string
+    resource_server_identifier = string
+  })
+  default = null
 
   validation {
-    condition = var.external_authorization_server != null ? var.user_pool_id == null : (
-      var.user_pool_id == null ? false : trimspace(var.user_pool_id) != ""
+    condition = var.external_authorization_server != null ? var.cognito_authorization_server == null : (
+      var.cognito_authorization_server == null ? false : (
+        can(regex("^https://[^/?#@\\s]+(/[^?#\\s]*)?$", var.cognito_authorization_server.issuer)) &&
+        try(trimspace(var.cognito_authorization_server.client_id) != "", false) &&
+        can(regex("^[\\x21\\x23-\\x5B\\x5D-\\x7E]+$", var.cognito_authorization_server.required_scope)) &&
+        try(trimspace(var.cognito_authorization_server.resource_server_identifier) != "", false)
+      )
     )
-    error_message = "Provide user_pool_id for Cognito, or configure external_authorization_server and omit user_pool_id."
+    error_message = "Configure exactly one of cognito_authorization_server or external_authorization_server. Cognito requires an HTTPS issuer, nonempty client ID and resource-server identifier, and one valid OAuth scope."
   }
 }
 
@@ -51,7 +61,7 @@ variable "tool_backend_arn" {
 }
 
 variable "oauth_proxy_endpoints" {
-  description = "Optional Cognito or proxy endpoints using this module's public client. Publishes OAuth metadata at the MCP origin with S256 PKCE and code/refresh grants. The endpoints must support those capabilities. HTTP is allowed only on loopback hosts for local testing."
+  description = "Optional Cognito or proxy endpoints using the configured public Cognito client. Publishes OAuth metadata at the MCP origin with S256 PKCE and code/refresh grants. The endpoints must support those capabilities. HTTP is allowed only on loopback hosts for local testing."
   type = object({
     authorization_endpoint = string
     token_endpoint         = string
@@ -90,24 +100,6 @@ variable "server_version" {
   default     = "1.0.0"
 }
 
-variable "callback_urls" {
-  description = "Authorization-code callback URLs for the Cognito MCP app client. External clients are registered with their authorization server separately."
-  type        = list(string)
-  default     = []
-  nullable    = false
-
-  validation {
-    condition     = var.external_authorization_server != null || length(var.callback_urls) > 0
-    error_message = "Cognito mode requires at least one registered callback URL."
-  }
-}
-
-variable "logout_urls" {
-  description = "Logout URLs for the MCP app client."
-  type        = list(string)
-  default     = []
-}
-
 variable "allowed_origins" {
   description = "Exact canonical HTTP(S) browser origins allowed by Origin validation and CORS. Empty denies supplied Origin headers; native clients may omit Origin. No wildcards, paths, credentials, or default ports."
   type        = set(string)
@@ -123,29 +115,6 @@ variable "allowed_origins" {
     ])
     error_message = "allowed_origins must contain exact canonical http:// or https:// origins with an optional port from 1 to 65535. Omit default ports; wildcards, paths, credentials, and opaque origins are not allowed."
   }
-}
-
-variable "enable_password_auth_for_tests" {
-  description = "TEST-ONLY. Adds ALLOW_USER_PASSWORD_AUTH to the MCP client so smoke tests can mint tokens without a browser. Keep false in any real deployment."
-  type        = bool
-  default     = false
-}
-
-variable "resource_server_identifier" {
-  description = "Cognito resource-server identifier, unique within user_pool_id. Defaults to mcp_url so resource-bound custom scopes can be issued. A different identifier requires allow_unbound_access_tokens for legacy compatibility."
-  type        = string
-  default     = null
-
-  validation {
-    condition     = var.resource_server_identifier == null ? true : can(regex("^[\\x21\\x23-\\x5B\\x5D-\\x7E]{1,256}$", var.resource_server_identifier))
-    error_message = "resource_server_identifier must contain 1–256 printable ASCII characters, excluding spaces, double quotes, and backslashes."
-  }
-}
-
-variable "scope_name" {
-  description = "Scope name under the resource server. Tokens carry it as <resource_server_identifier>/<scope_name>."
-  type        = string
-  default     = "read"
 }
 
 variable "allow_unbound_access_tokens" {
@@ -197,15 +166,13 @@ locals {
     "mcp-param-${lower(jsondecode("\"${annotation[0]}\""))}"
     if can(regex("^[!#$%&'*+.^_\\x60|~0-9A-Za-z-]+$", jsondecode("\"${annotation[0]}\"")))
   ]]))
-  cors_request_headers       = concat(["authorization", "content-type", "mcp-protocol-version", "accept", "mcp-method", "mcp-name"], local.tool_param_headers)
-  cors_expose_headers        = ["WWW-Authenticate"]
-  resource_server_identifier = var.resource_server_identifier == null ? local.mcp_url : var.resource_server_identifier
-  full_scope                 = var.external_authorization_server == null ? "${local.resource_server_identifier}/${var.scope_name}" : var.external_authorization_server.required_scope
-  mcp_url                    = "https://${aws_cloudfront_distribution.mcp.domain_name}/mcp"
-  resource_metadata_url      = "${aws_apigatewayv2_api.mcp.api_endpoint}/.well-known/oauth-protected-resource/mcp"
-  cognito_issuer             = var.user_pool_id == null ? null : "https://cognito-idp.${data.aws_region.current.region}.amazonaws.com/${var.user_pool_id}"
-  authorization_issuer       = var.external_authorization_server == null ? local.cognito_issuer : var.external_authorization_server.issuer
-  oauth_discovery_issuer     = var.oauth_proxy_endpoints == null ? local.authorization_issuer : trimsuffix(local.mcp_url, "/mcp")
+  cors_request_headers   = concat(["authorization", "content-type", "mcp-protocol-version", "accept", "mcp-method", "mcp-name"], local.tool_param_headers)
+  cors_expose_headers    = ["WWW-Authenticate"]
+  full_scope             = var.external_authorization_server == null ? try(var.cognito_authorization_server.required_scope, null) : var.external_authorization_server.required_scope
+  mcp_url                = "https://${aws_cloudfront_distribution.mcp.domain_name}/mcp"
+  resource_metadata_url  = "${aws_apigatewayv2_api.mcp.api_endpoint}/.well-known/oauth-protected-resource/mcp"
+  authorization_issuer   = var.external_authorization_server == null ? try(var.cognito_authorization_server.issuer, null) : var.external_authorization_server.issuer
+  oauth_discovery_issuer = var.oauth_proxy_endpoints == null ? local.authorization_issuer : trimsuffix(local.mcp_url, "/mcp")
   oauth_server_metadata = var.oauth_proxy_endpoints == null ? null : {
     issuer                                = local.oauth_discovery_issuer
     authorization_endpoint                = var.oauth_proxy_endpoints.authorization_endpoint
@@ -218,7 +185,7 @@ locals {
     scopes_supported                      = ["openid", "email", local.full_scope]
   }
   authorization_mode = var.external_authorization_server == null ? "cognito" : "external"
-  mcp_client_id      = var.external_authorization_server == null ? aws_cognito_user_pool_client.mcp[0].id : var.external_authorization_server.client_id
+  mcp_client_id      = var.external_authorization_server == null ? try(var.cognito_authorization_server.client_id, null) : var.external_authorization_server.client_id
   client_id_claim    = var.external_authorization_server == null ? "client_id" : var.external_authorization_server.client_id_claim
   access_token_claim = var.external_authorization_server == null ? {
     name = "token_use", value = "access"

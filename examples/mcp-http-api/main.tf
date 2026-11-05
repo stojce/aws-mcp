@@ -65,7 +65,7 @@ resource "aws_cognito_user_pool_domain" "example" {
 # need an explicit branding style for each app client before login is available.
 resource "aws_cognito_managed_login_branding" "mcp" {
   user_pool_id                = aws_cognito_user_pool.example.id
-  client_id                   = module.mcp.mcp_app_client_id
+  client_id                   = module.cognito.client_id
   use_cognito_provided_values = true
 
   depends_on = [aws_cognito_user_pool_domain.example]
@@ -180,23 +180,32 @@ resource "aws_lambda_function" "tool_backend" {
   depends_on = [aws_iam_role_policy_attachment.tool_backend_logs]
 }
 
+# ── Cognito authentication, composed alongside the MCP endpoint ────────────
+
+module "cognito" {
+  source = "../../modules/cognito"
+
+  name                           = local.name
+  user_pool_id                   = aws_cognito_user_pool.example.id
+  mcp_url                        = module.mcp.mcp_url
+  callback_urls                  = var.callback_urls
+  enable_password_auth_for_tests = var.enable_password_auth_for_tests
+}
+
 # ── The module under test ────────────────────────────────────────────────────
 
 module "mcp" {
   source = "../../modules/mcp-http-api"
 
-  name             = local.name
-  user_pool_id     = aws_cognito_user_pool.example.id
-  tool_backend_arn = aws_lambda_function.tool_backend.arn
-  server_name      = "bookings-mcp"
-  server_version   = "1.0.0"
+  name                         = local.name
+  cognito_authorization_server = module.cognito.authorization_server
+  tool_backend_arn             = aws_lambda_function.tool_backend.arn
+  server_name                  = "bookings-mcp"
+  server_version               = "1.0.0"
 
-  callback_urls   = var.callback_urls
   allowed_origins = var.allowed_origins
 
   oauth_proxy_endpoints = local.oauth_endpoints
-
-  enable_password_auth_for_tests = var.enable_password_auth_for_tests
 
   tools = [
     {

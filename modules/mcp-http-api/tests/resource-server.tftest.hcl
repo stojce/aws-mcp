@@ -26,11 +26,15 @@ mock_provider "aws" {
 mock_provider "archive" {}
 
 variables {
-  name             = "mcp-resource-server-test"
-  user_pool_id     = "eu-west-1_shared"
+  name = "mcp-resource-server-test"
+  cognito_authorization_server = {
+    issuer                     = "https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_shared"
+    client_id                  = "mcp-client"
+    required_scope             = "https://mcp.example.cloudfront.net/mcp/read"
+    resource_server_identifier = "https://mcp.example.cloudfront.net/mcp"
+  }
   tool_backend_arn = "arn:aws:lambda:eu-west-1:123456789012:function:backend"
   server_name      = "resource-server-test"
-  callback_urls    = ["http://localhost:8080/callback"]
   tools            = []
 }
 
@@ -39,13 +43,16 @@ run "default_identifier_matches_the_bound_resource" {
 
   assert {
     condition = (
-      aws_cognito_resource_server.mcp[0].identifier == output.mcp_url &&
+      output.mcp_resource_server_identifier == output.mcp_url &&
+      output.authorization_server_issuer == "https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_shared" &&
+      aws_apigatewayv2_authorizer.jwt.jwt_configuration[0].issuer == output.authorization_server_issuer &&
+      output.mcp_app_client_id == var.cognito_authorization_server.client_id &&
+      aws_lambda_function.mcp.environment[0].variables.MCP_CLIENT_ID == output.mcp_app_client_id &&
       output.required_scope == "${output.mcp_url}/read" &&
-      contains(aws_cognito_user_pool_client.mcp[0].allowed_oauth_scopes, output.required_scope) &&
       aws_apigatewayv2_route.mcp.authorization_scopes == toset([output.required_scope]) &&
       aws_lambda_function.mcp.environment[0].variables.MCP_REQUIRED_SCOPE == output.required_scope
     )
-    error_message = "Cognito must own the canonical resource URL and every scope consumer must require its scope."
+    error_message = "Every scope consumer must use the supplied Cognito configuration for the canonical resource URL."
   }
 }
 
@@ -53,29 +60,30 @@ run "custom_identifier_reaches_every_scope_consumer" {
   command = apply
 
   variables {
-    resource_server_identifier  = "https://bookings.example.com"
-    scope_name                  = "bookings.read"
+    cognito_authorization_server = {
+      issuer                     = "https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_shared"
+      client_id                  = "bookings-client"
+      required_scope             = "https://bookings.example.com/bookings.read"
+      resource_server_identifier = "https://bookings.example.com"
+    }
     allow_unbound_access_tokens = true
   }
 
   assert {
     condition = (
-      aws_cognito_resource_server.mcp[0].identifier == "https://bookings.example.com" &&
-      aws_cognito_resource_server.mcp[0].user_pool_id == "eu-west-1_shared" &&
+      output.mcp_resource_server_identifier == "https://bookings.example.com" &&
       output.required_scope == "https://bookings.example.com/bookings.read"
     )
-    error_message = "The configured identifier must determine the resource server and fully qualified scope."
+    error_message = "The module outputs must retain the supplied resource-server identifier and scope."
   }
 
   assert {
     condition = (
-      contains(aws_cognito_user_pool_client.mcp[0].allowed_oauth_scopes, output.required_scope) &&
-      !contains(aws_cognito_user_pool_client.mcp[0].allowed_oauth_scopes, "mcp/bookings.read") &&
       aws_apigatewayv2_route.mcp.authorization_type == "JWT" &&
       aws_apigatewayv2_route.mcp.authorization_scopes == toset([output.required_scope]) &&
       aws_lambda_function.mcp.environment[0].variables.MCP_REQUIRED_SCOPE == output.required_scope
     )
-    error_message = "The client, JWT route, and Lambda must agree on the custom scope without granting the default scope."
+    error_message = "The JWT route and Lambda must enforce the scope supplied by the Cognito module."
   }
 
   assert {
@@ -87,33 +95,6 @@ run "custom_identifier_reaches_every_scope_consumer" {
   }
 }
 
-run "legacy_short_identifier_requires_explicit_compatibility" {
-  command = plan
-  variables {
-    resource_server_identifier = "mcp"
-  }
-  expect_failures = [aws_cognito_resource_server.mcp]
-}
-
-run "different_resource_url_is_rejected_in_strict_mode" {
-  command = plan
-  variables {
-    resource_server_identifier = "https://different.example.com/mcp"
-  }
-  expect_failures = [aws_cognito_resource_server.mcp]
-}
-
-run "matching_explicit_resource_url_is_accepted" {
-  command = apply
-  variables {
-    resource_server_identifier = "https://mcp.example.cloudfront.net/mcp"
-  }
-  assert {
-    condition     = output.mcp_resource_server_identifier == output.mcp_url && output.required_scope == "${output.mcp_url}/read"
-    error_message = "An explicit identifier matching the canonical resource URL must support strict resource binding."
-  }
-}
-
 run "distinct_instances_share_a_pool_with_a_gateway_owner" {
   command = apply
 
@@ -122,12 +103,12 @@ run "distinct_instances_share_a_pool_with_a_gateway_owner" {
   }
 
   override_resource {
-    target = module.mcp["bookings"].aws_cloudfront_distribution.mcp
+    target = module.bookings.aws_cloudfront_distribution.mcp
     values = { domain_name = "bookings.example.cloudfront.net" }
   }
 
   override_resource {
-    target = module.mcp["catalog"].aws_cloudfront_distribution.mcp
+    target = module.catalog.aws_cloudfront_distribution.mcp
     values = { domain_name = "catalog.example.cloudfront.net" }
   }
 
@@ -145,44 +126,4 @@ run "distinct_instances_share_a_pool_with_a_gateway_owner" {
     condition     = output.scopes == { bookings = "https://bookings.example.cloudfront.net/mcp/read", catalog = "https://catalog.example.cloudfront.net/mcp/read" }
     error_message = "Shared-pool instances must advertise their own fully qualified scopes."
   }
-}
-
-run "empty_identifier_is_rejected" {
-  command = plan
-  variables {
-    resource_server_identifier = ""
-  }
-  expect_failures = [var.resource_server_identifier]
-}
-
-run "identifier_with_spaces_is_rejected" {
-  command = plan
-  variables {
-    resource_server_identifier = "mcp bookings"
-  }
-  expect_failures = [var.resource_server_identifier]
-}
-
-run "identifier_with_quotes_is_rejected" {
-  command = plan
-  variables {
-    resource_server_identifier = "mcp\"bookings"
-  }
-  expect_failures = [var.resource_server_identifier]
-}
-
-run "identifier_with_backslashes_is_rejected" {
-  command = plan
-  variables {
-    resource_server_identifier = "mcp\\bookings"
-  }
-  expect_failures = [var.resource_server_identifier]
-}
-
-run "overlong_identifier_is_rejected" {
-  command = plan
-  variables {
-    resource_server_identifier = join("", [for i in range(257) : "a"])
-  }
-  expect_failures = [var.resource_server_identifier]
 }

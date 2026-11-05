@@ -37,8 +37,6 @@ run "external_server_replaces_cognito_configuration" {
   command = apply
   assert {
     condition = (
-      length(aws_cognito_resource_server.mcp) == 0 &&
-      length(aws_cognito_user_pool_client.mcp) == 0 &&
       output.authorization_mode == "external" &&
       output.mcp_resource_server_identifier == null &&
       output.authorization_server_issuer == var.external_authorization_server.issuer &&
@@ -98,17 +96,23 @@ run "external_auth_rejects_unbound_token_compatibility" {
 
 run "both_authorization_modes_are_rejected" {
   command = plan
-  variables { user_pool_id = "eu-west-1_example" }
-  expect_failures = [var.user_pool_id]
+  variables {
+    cognito_authorization_server = {
+      issuer                     = "https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_example"
+      client_id                  = "mcp-client"
+      required_scope             = "https://mcp.example.cloudfront.net/mcp/read"
+      resource_server_identifier = "https://mcp.example.cloudfront.net/mcp"
+    }
+  }
+  expect_failures = [var.cognito_authorization_server]
 }
 
 run "an_authorization_server_is_required" {
   command = plan
   variables {
     external_authorization_server = null
-    callback_urls                 = ["http://localhost:8080/callback"]
   }
-  expect_failures = [var.user_pool_id]
+  expect_failures = [var.cognito_authorization_server]
 }
 
 run "insecure_external_issuer_is_rejected" {

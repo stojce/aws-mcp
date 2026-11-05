@@ -1,7 +1,8 @@
 # Example: mcp-http-api
 
-Deploys `modules/mcp-http-api` in a sandbox account with a Cognito pool and domain,
-two test users, a DynamoDB bookings table, a tool backend Lambda, and the MCP
+Composes `modules/cognito` and `modules/mcp-http-api` in a sandbox account with a
+Cognito pool and domain, two test users, a DynamoDB bookings table, a tool backend
+Lambda, and the MCP
 endpoint. The default authentication policy requires resource-bound access tokens.
 
 Requires Terraform 1.9+ and AWS provider 6.13.0+ for the managed-login branding
@@ -10,6 +11,11 @@ with a default branding style assigned to the MCP app client. Classic hosted UI
 version 1 does not issue the resource audience required by the strict MCP policy.
 The Cognito resource-server identifier is the canonical MCP URL, so the default
 required scope is `<MCP_URL>/read`. Use the `required_scope` Terraform output.
+
+The root calls both modules separately. Cognito receives the MCP URL to bind its
+scope, and MCP receives Cognito's issuer, public client ID, and scope. Existing
+resource addresses migrate through `moved.tf`; rerun `terraform init` and inspect
+the plan before applying the extraction.
 
 ## Deploy
 

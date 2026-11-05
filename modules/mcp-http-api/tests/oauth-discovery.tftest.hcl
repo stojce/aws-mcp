@@ -28,11 +28,15 @@ mock_provider "aws" {
 mock_provider "archive" {}
 
 variables {
-  name             = "mcp-oauth-test"
-  user_pool_id     = "eu-west-1_example"
+  name = "mcp-oauth-test"
+  cognito_authorization_server = {
+    issuer                     = "https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_example"
+    client_id                  = "mcp-client"
+    required_scope             = "https://mcp.example.cloudfront.net/mcp/read"
+    resource_server_identifier = "https://mcp.example.cloudfront.net/mcp"
+  }
   tool_backend_arn = "arn:aws:lambda:eu-west-1:123456789012:function:backend"
   server_name      = "oauth-test"
-  callback_urls    = ["http://localhost:8080/callback"]
   tools            = []
 }
 

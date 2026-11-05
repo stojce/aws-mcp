@@ -62,10 +62,14 @@ test('module packages remain isolated through intervening plans and saved-plan a
     module: Object.fromEntries(instances.map(instance => [instance, {
       source: './mcp-http-api',
       name: `mcp-${instance}`,
-      user_pool_id: `eu-west-1_${instance}`,
+      cognito_authorization_server: {
+        issuer: 'https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_example',
+        client_id: `client-${instance}`,
+        required_scope: 'https://mcp.example.com/mcp/read',
+        resource_server_identifier: 'https://mcp.example.com/mcp',
+      },
       tool_backend_arn: `arn:aws:lambda:eu-west-1:123456789012:function:${instance}`,
       server_name: `${instance}-server`,
-      callback_urls: ['http://localhost:8080/callback'],
       tools: [{
         name: 'get_' + instance + '${var.tool_suffix}',
         description: `Tool for ${instance}.`,

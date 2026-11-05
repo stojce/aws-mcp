@@ -24,18 +24,18 @@ output "authorization_server_metadata_url" {
 }
 
 output "mcp_app_client_id" {
-  description = "Dedicated MCP client ID, created in Cognito or supplied for the external server. The Lambda pins the configured client claim to it."
+  description = "Dedicated MCP client ID, supplied by the Cognito module or external server. The Lambda pins the configured client claim to it."
   value       = local.mcp_client_id
 }
 
 output "required_scope" {
-  description = "Required OAuth scope: supplied by the external authorization server, or <resource_server_identifier>/<scope_name> in Cognito mode (defaults to <mcp_url>/read)."
+  description = "Required OAuth scope supplied by the configured authorization server. The standalone Cognito module defaults to <mcp_url>/read."
   value       = local.full_scope
 }
 
 output "mcp_resource_server_identifier" {
-  description = "Identifier of the Cognito resource server owned by this module instance; null in external authorization mode."
-  value       = var.external_authorization_server == null ? aws_cognito_resource_server.mcp[0].identifier : null
+  description = "Identifier of the configured Cognito resource server; null in external authorization mode."
+  value       = var.external_authorization_server == null ? try(var.cognito_authorization_server.resource_server_identifier, null) : null
 }
 
 output "authorization_mode" {

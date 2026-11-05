@@ -9,14 +9,15 @@ external OAuth/OIDC authorization server.
 
 | Resource | Purpose |
 |---|---|
-| `aws_cognito_resource_server` | Cognito mode only: resource server identified by `mcp_url`; the default scope is `<mcp_url>/read` |
-| `aws_cognito_user_pool_client` | Cognito mode only: dedicated public PKCE client |
 | `aws_apigatewayv2_api` + authorizer + `ANY /mcp` route | Edge JWT check enforcing the fully qualified `required_scope` |
 | `aws_lambda_function` (MCP server) | JSON-RPC over Streamable HTTP; invokes the tool backend |
 | IAM role | `lambda:InvokeFunction` on `tool_backend_arn` only |
 
-The tool backend is an input. Cognito mode also requires an existing user pool;
-external mode uses an existing authorization server and registered MCP client.
+The tool backend and authorization-server configuration are inputs. Cognito
+resources are provisioned separately by [`modules/cognito`](../cognito). The root
+configuration composes both modules and passes the Cognito module's
+`authorization_server` output to `cognito_authorization_server`. External mode
+uses an existing authorization server and registered MCP client.
 
 Requires Terraform 1.9+ and `hashicorp/aws >= 6.0.0, < 7.0.0`. The supporting
 example requires AWS provider 6.13.0+ for managed-login branding. AWS provider v5
@@ -38,13 +39,20 @@ introduced in v6.
 ## Usage
 
 ```hcl
+module "cognito" {
+  source        = "../../modules/cognito"
+  name          = "bookings"
+  user_pool_id  = var.user_pool_id
+  mcp_url       = module.mcp.mcp_url
+  callback_urls = ["https://agent.example.com/callback"]
+}
+
 module "mcp" {
-  source           = "../../modules/mcp-http-api"
-  name             = "bookings"
-  user_pool_id     = var.user_pool_id
-  tool_backend_arn = aws_lambda_function.backend.arn
-  server_name      = "bookings-mcp"
-  callback_urls    = ["https://agent.example.com/callback"]
+  source                       = "../../modules/mcp-http-api"
+  name                         = "bookings"
+  cognito_authorization_server = module.cognito.authorization_server
+  tool_backend_arn             = aws_lambda_function.backend.arn
+  server_name                  = "bookings-mcp"
 
   tools = [{
     name         = "get_my_bookings"
@@ -56,11 +64,34 @@ module "mcp" {
 
 The tool backend must scope every read by `event.identity.sub`.
 
+## Migrating existing Cognito deployments
+
+Move `user_pool_id`, `callback_urls`, `logout_urls`, `resource_server_identifier`,
+`scope_name`, and `enable_password_auth_for_tests` from the MCP module call to
+`module.cognito`. Pass `module.mcp.mcp_url` as its `mcp_url`, and pass
+`module.cognito.authorization_server` back as the MCP module's
+`cognito_authorization_server`. The MCP outputs retain their names.
+
+Add this move in the calling root configuration, adjusting the module names if
+needed. The [example](../../examples/mcp-http-api/moved.tf) includes it:
+
+```hcl
+moved {
+  from = module.mcp.module.cognito[0]
+  to   = module.cognito
+}
+```
+
+The MCP module retains historical moves from both the original uncounted
+resources and the later `[0]` resource addresses. They lead into this root-level
+move, preserving the existing client and resource server. Run `terraform init`
+and inspect the plan before applying. For legacy unbound tokens, keep
+`allow_unbound_access_tokens = true` on both module calls.
+
 ## External authorization servers
 
-Configure `external_authorization_server` and omit `user_pool_id`. The module
-creates no Cognito resources in this mode; register the client and its exact
-callbacks with your provider separately.
+Configure `external_authorization_server` and omit `cognito_authorization_server`.
+Register the client and its exact callbacks with your provider separately.
 
 ```hcl
 module "mcp" {
@@ -107,11 +138,10 @@ The backend still receives `identity: { sub, clientId }`. External subjects belo
 to that issuer; map them to your application's users if existing data uses Cognito
 subjects. One issuer is configured per endpoint.
 
-Terraform moves preserve the existing Cognito resource addresses on upgrade.
-Switching an existing module instance to external mode plans deletion of its
-module-owned Cognito client and resource server and changes the JWT issuer.
-Inspect that plan and migrate subjects and clients before applying it; a separate
-endpoint allows a gradual transition.
+Switching the MCP endpoint to external mode changes the trusted JWT issuer.
+Cognito resource lifecycle remains controlled by the separate Cognito module
+call. Inspect the plan and migrate subjects and clients before applying; a
+separate endpoint allows a gradual transition.
 
 The example Cognito pool's public discovery document was checked on 2026-11-04
 and omitted `code_challenge_methods_supported`. Strict MCP OAuth clients must
@@ -161,7 +191,7 @@ combined with `external_authorization_server`.
 ## Authorization code and PKCE
 
 In Cognito mode, use the public app client returned as `mcp_app_client_id`. Pre-register
-the MCP client's exact redirect URI in `callback_urls` and supply that client ID
+the MCP client's exact redirect URI in the Cognito module's `callback_urls` and supply that client ID
 to the MCP software. This module does not provide dynamic client registration.
 The existing pool must use Cognito managed login (domain version 2), an Essentials
 or Plus feature plan, and a branding style assigned to this app client. Resource
@@ -360,7 +390,7 @@ allowed_origins = ["https://agent.example.com", "http://localhost:8080"]
 
 Use canonical origins containing only scheme, host, and an optional non-default
 port. Paths, credentials, wildcards, and opaque origins such as `null` are
-rejected. Register the complete callback URL separately in `callback_urls`.
+rejected. Register the complete callback URL in the Cognito module's `callback_urls`.
 The default empty allowlist rejects every supplied Origin header. Native MCP
 clients may omit Origin and continue using bearer authentication.
 
@@ -421,14 +451,14 @@ isolation test after rebuilding.
 
 ## Shared Cognito pools
 
-When `resource_server_identifier` is unset (`null`), each module instance uses
-its generated `mcp_url` as its identifier. Separate endpoints therefore own
+When `resource_server_identifier` is unset (`null`), each Cognito module instance
+uses its supplied `mcp_url` as its identifier. Separate endpoints therefore own
 distinct resource servers even in the same pool, including a pool where the
 sibling `mcp-gateway` module already owns `mcp`. Only one Terraform resource may
-own each pool/identifier pair; the module creates its own resource server and
+own each pool/identifier pair; the Cognito module creates its own resource server and
 does not adopt another owner's resource.
 
-The default `scope_name = "read"` produces `<mcp_url>/read`. The app client's
+The Cognito module's default `scope_name = "read"` produces `<mcp_url>/read`. The app client's
 allowed scopes, API route, Lambda checks, and protected-resource metadata use
 that value. Clients must request the `required_scope` output;
 `mcp_resource_server_identifier` exposes the identifier itself. The static
@@ -438,7 +468,8 @@ Terraform dependency cycle.
 
 Strict resource binding rejects an override that differs from `mcp_url`.
 To preserve an existing short identifier during a legacy migration, configure
-both inputs explicitly:
+these inputs on the Cognito module and also enable `allow_unbound_access_tokens`
+on the MCP module:
 
 ```hcl
 resource_server_identifier = "mcp-bookings"
@@ -498,6 +529,7 @@ Run the runtime suites and Terraform mock tests from the repository root:
 ```bash
 node --test modules/mcp-gateway/lambda/interceptor/index.test.js modules/mcp-http-api/lambda/mcp-server/*.test.mjs
 terraform -chdir=modules/mcp-http-api test
+terraform -chdir=modules/cognito test
 ```
 
 ## Limits
@@ -506,7 +538,7 @@ terraform -chdir=modules/mcp-http-api test
 - One JSON response per POST; JSON-RPC batches are rejected (removed in protocol 2025-06-18).
 - Only tools are exposed. No resources or prompts.
 - HTTP API has a 30-second maximum integration timeout; see the deadline budget below.
-- `enable_password_auth_for_tests` must stay `false` outside sandboxes.
+- The Cognito module's `enable_password_auth_for_tests` must stay `false` outside sandboxes.
 
 ## Tool deadlines
 
