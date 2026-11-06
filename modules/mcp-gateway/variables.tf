@@ -1,12 +1,6 @@
 variable "name" {
-  description = "Application short name used in every resource name (e.g. \"guryou-stage2\")."
+  description = "Application short name used in every resource name (e.g. \"mcp-demo\")."
   type        = string
-}
-
-variable "region" {
-  description = "AWS region. The existing stack runs in eu-west-1; AgentCore Gateway is available there."
-  type        = string
-  default     = "eu-west-1"
 }
 
 variable "user_pool_id" {
@@ -23,13 +17,11 @@ variable "gateway_lambda_target_arn" {
 variable "web_client_callback_url" {
   description = "The MCP app client is an authorization-code (+PKCE) confidential client; the consuming agent app registers its callback here."
   type        = string
-  default     = "http://localhost:8080/callback"
 }
 
 variable "web_client_logout_url" {
   description = "Logout URL for the MCP app client."
   type        = string
-  default     = "http://localhost:8080/"
 }
 
 # v1 tool list (ticket 10, verified against the real proxy schema):
@@ -48,6 +40,13 @@ variable "targets" {
     output_schema    = optional(string)
   }))
   default = []
+}
+
+variable "login_branding" {
+  description = "Cognito managed Login page branding"
+  type = object({
+    logo_bytes = any
+  })
 }
 
 locals {
