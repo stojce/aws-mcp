@@ -195,15 +195,31 @@ test('module packages remain isolated through intervening plans and saved-plan a
     const resource = 'https://mcp.example.com/mcp';
     const origin = 'https://app.example.com';
     const identity = { sub: 'verified-user', clientId: 'verified-client' };
+    const authorizationMetadata = {
+      issuer: 'https://mcp.example.com',
+      authorization_endpoint: 'https://packaged.auth.eu-west-1.amazoncognito.com/oauth2/authorize',
+      token_endpoint: 'https://packaged.auth.eu-west-1.amazoncognito.com/oauth2/token',
+      response_types_supported: ['code'], grant_types_supported: ['authorization_code', 'refresh_token'],
+      code_challenge_methods_supported: ['S256'], token_endpoint_auth_methods_supported: ['none'],
+      scopes_supported: ['openid', 'email', 'mcp/read'], client_id_metadata_document_supported: false,
+    };
     Object.assign(process.env, {
       MCP_CLIENT_ID: identity.clientId, MCP_REQUIRED_SCOPE: 'mcp/read', MCP_RESOURCE_URL: resource,
       MCP_RESOURCE_METADATA_URL: 'https://api.example.com/.well-known/oauth-protected-resource/mcp',
-      MCP_AUTHORIZATION_SERVER: 'https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_example',
+      MCP_AUTHORIZATION_SERVER: authorizationMetadata.issuer,
+      MCP_AUTHORIZATION_SERVER_METADATA: JSON.stringify(authorizationMetadata),
       MCP_ALLOWED_ORIGINS: JSON.stringify([origin]), MCP_TOOL_TIMEOUT_MS: '20',
       TOOL_BACKEND_ARN: 'arn:aws:lambda:eu-west-1:123456789012:function:backend',
     });
     const { handler } = await import('./index.mjs');
     const { tools } = JSON.parse(await readFile('tools.json', 'utf8'));
+    const oauthDiscovery = await handler({
+      routeKey: 'GET /.well-known/oauth-authorization-server',
+      requestContext: { http: { method: 'GET' } }, headers: {},
+    });
+    assert.equal(oauthDiscovery.statusCode, 200);
+    assert.deepEqual(JSON.parse(oauthDiscovery.body), authorizationMetadata);
+    assert.equal(calls.length, 0, 'Public OAuth discovery must only read deployment configuration');
     const claims = { sub: identity.sub, client_id: identity.clientId, token_use: 'access', aud: resource, scope: 'mcp/read' };
     const event = body => ({ headers: { origin, 'mcp-protocol-version': '2025-06-18' },
       requestContext: { http: { method: 'POST' }, authorizer: { jwt: { claims } } }, body: JSON.stringify(body) });

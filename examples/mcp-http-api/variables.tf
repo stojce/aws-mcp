@@ -12,26 +12,21 @@ variable "region" {
 variable "enable_password_auth_for_tests" {
   description = "TEST-ONLY. Lets the smoke test mint tokens with USER_PASSWORD_AUTH. Keep false outside the sandbox."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "callback_urls" {
-  description = "Pre-registered authorization-code callbacks for the local login page, MCP Inspector, Claude hosted connectors, and mcptest.io. Match the host, port, and path used by your client."
+  description = "Pre-registered authorization-code callbacks for hosted MCP clients. Register the exact callback displayed by each client. Local development callbacks require an explicit override."
   type        = list(string)
   default = [
-    "http://localhost:8080/callback",
-    "http://localhost:6274/oauth/callback",
-    "http://localhost:6274/oauth/callback/debug",
-    "http://127.0.0.1:6274/oauth/callback",
-    "http://127.0.0.1:6274/oauth/callback/debug",
     "https://claude.ai/api/mcp/auth_callback",
     "https://mcptest.io/oauth/callback",
-    "https://chatgpt.com/connector/oauth/w5eXLFkBjXmB",
+    "https://chatgpt.com/connector_platform_oauth_redirect",
   ]
 }
 
 variable "oauth_proxy_endpoints" {
-  description = "Optional OAuth endpoint overrides. Default null publishes S256 metadata pointing to public Cognito endpoints. Use local-oauth.tfvars.example to advertise the localhost helper for local clients."
+  description = "Optional public HTTPS OAuth endpoint overrides. Default null builds both endpoints from the deployed Cognito domain and publishes S256 metadata. No local login server is required."
   type = object({
     authorization_endpoint = string
     token_endpoint         = string
@@ -40,9 +35,9 @@ variable "oauth_proxy_endpoints" {
 }
 
 variable "allowed_origins" {
-  description = "Exact browser origins allowed to call MCP. Defaults support MCP Inspector and mcptest.io. Register OAuth callbacks separately; native clients need no origin entry."
+  description = "Exact browser origins allowed to call MCP. Defaults support mcptest.io. Register OAuth callbacks separately; native clients need no origin entry. Local development origins require an explicit override."
   type        = set(string)
-  default     = ["http://localhost:6274", "http://127.0.0.1:6274", "https://mcptest.io"]
+  default     = ["https://mcptest.io"]
 }
 
 variable "test_users" {

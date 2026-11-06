@@ -61,7 +61,7 @@ variable "tool_backend_arn" {
 }
 
 variable "oauth_proxy_endpoints" {
-  description = "Optional Cognito or proxy endpoints using the configured public Cognito client. Publishes OAuth metadata at the MCP origin with S256 PKCE and code/refresh grants. The endpoints must support those capabilities. HTTP is allowed only on loopback hosts for local testing."
+  description = "Optional public HTTPS Cognito or proxy endpoints using the configured Cognito client. Publishes OAuth metadata at the MCP origin with S256 PKCE and code/refresh grants. The endpoints must support those capabilities and be reachable by remote MCP clients. Loopback endpoints are rejected."
   type = object({
     authorization_endpoint = string
     token_endpoint         = string
@@ -72,11 +72,12 @@ variable "oauth_proxy_endpoints" {
     condition = var.oauth_proxy_endpoints == null ? true : (
       var.external_authorization_server == null && alltrue([
         for endpoint in [var.oauth_proxy_endpoints.authorization_endpoint, var.oauth_proxy_endpoints.token_endpoint] :
-        can(regex("^(https://[a-zA-Z0-9.-]+|http://(localhost|127\\.0\\.0\\.1|\\[::1\\]))(:[1-9][0-9]{0,4})?/[^?#@\\s]*$", endpoint)) &&
+        can(regex("^https://[a-zA-Z0-9.-]+(:[1-9][0-9]{0,4})?/[^?#@\\s]*$", endpoint)) &&
+        !can(regex("(?i)^https://(localhost\\.?|[^/:]+\\.localhost\\.?|127\\.[0-9.]+|0\\.0\\.0\\.0)(:|/)", endpoint)) &&
         try(tonumber(regex(":([0-9]+)/", endpoint)[0]) <= 65535, true)
       ])
     )
-    error_message = "oauth_proxy_endpoints requires Cognito mode and HTTPS URLs (or HTTP loopback URLs) with paths, valid ports, and no credentials, query, or fragment."
+    error_message = "oauth_proxy_endpoints requires Cognito mode and non-loopback HTTPS URLs with paths, valid ports, and no credentials, query, or fragment. Use public Cognito endpoints for deployed clients."
   }
 }
 
@@ -148,11 +149,6 @@ variable "lambda_timeout_s" {
 variable "log_retention_days" {
   type    = number
   default = 30
-}
-
-variable "tags" {
-  type    = map(string)
-  default = {}
 }
 
 locals {

@@ -1,6 +1,3 @@
-# Opt in with -var-file=local-oauth.tfvars.example on the helper's machine.
-# Hosted clients such as Claude and mcptest.io need the default public endpoints.
-oauth_proxy_endpoints = {
-  authorization_endpoint = "http://localhost:8080/authorize"
-  token_endpoint         = "http://localhost:8080/token"
-}
+# Legacy variable-file name. Keep deployed OAuth discovery on public Cognito.
+# The null default builds both endpoints from the deployed Cognito domain.
+oauth_proxy_endpoints = null

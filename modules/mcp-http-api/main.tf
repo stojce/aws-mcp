@@ -38,8 +38,6 @@ resource "aws_iam_role" "mcp" {
       Principal = { Service = "lambda.amazonaws.com" }
     }]
   })
-
-  tags = var.tags
 }
 
 resource "aws_iam_role_policy_attachment" "mcp_logs" {
@@ -64,7 +62,6 @@ resource "aws_iam_role_policy" "invoke_backend" {
 resource "aws_cloudwatch_log_group" "mcp" {
   name              = "/aws/lambda/${var.name}-mcp-server"
   retention_in_days = var.log_retention_days
-  tags              = var.tags
 }
 
 resource "aws_lambda_function" "mcp" {
@@ -96,8 +93,6 @@ resource "aws_lambda_function" "mcp" {
   }
 
   depends_on = [aws_cloudwatch_log_group.mcp, aws_iam_role_policy_attachment.mcp_logs]
-
-  tags = var.tags
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -119,8 +114,6 @@ resource "aws_apigatewayv2_api" "mcp" {
       max_age           = 300
     }
   }
-
-  tags = var.tags
 }
 
 resource "aws_apigatewayv2_authorizer" "jwt" {
@@ -199,7 +192,6 @@ resource "aws_apigatewayv2_route" "preflight" {
 resource "aws_cloudwatch_log_group" "api_access" {
   name              = "/aws/apigateway/${var.name}-mcp"
   retention_in_days = var.log_retention_days
-  tags              = var.tags
 }
 
 resource "aws_apigatewayv2_stage" "default" {
@@ -227,8 +219,6 @@ resource "aws_apigatewayv2_stage" "default" {
       sub            = "$context.authorizer.claims.sub"
     })
   }
-
-  tags = var.tags
 }
 
 resource "aws_lambda_permission" "apigw_invoke_mcp" {

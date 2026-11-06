@@ -5,8 +5,8 @@ import { handleHttpEvent } from './runtime.mjs';
 const issuer = 'https://example.cloudfront.net';
 const metadata = {
   issuer,
-  authorization_endpoint: 'http://localhost:8080/authorize',
-  token_endpoint: 'http://localhost:8080/token',
+  authorization_endpoint: 'https://example.auth.eu-west-1.amazoncognito.com/oauth2/authorize',
+  token_endpoint: 'https://example.auth.eu-west-1.amazoncognito.com/oauth2/token',
   response_types_supported: ['code'],
   grant_types_supported: ['authorization_code', 'refresh_token'],
   token_endpoint_auth_methods_supported: ['none'],
@@ -20,7 +20,7 @@ const cfg = {
   authorizationServerMetadata: metadata,
   requiredScope: `${issuer}/mcp/read`,
   clientId: 'mcp-client',
-  allowedOrigins: ['http://localhost:6274'],
+  allowedOrigins: ['https://mcptest.io'],
   tools: [],
   invokeTool: () => assert.fail('Discovery must not invoke tools'),
 };
@@ -30,7 +30,7 @@ const event = (path, headers = {}) => ({
   headers,
 });
 
-test('public discovery leads to the proxy issuer and local OAuth endpoints without login', async () => {
+test('public discovery leads to the metadata issuer and public Cognito endpoints without login', async () => {
   for (const path of ['/.well-known/oauth-protected-resource/mcp', '/.well-known/oauth-protected-resource']) {
     const response = await handleHttpEvent(event(path), cfg);
     assert.equal(response.statusCode, 200);
@@ -54,8 +54,8 @@ test('proxy discovery is absent when disabled and respects the browser origin po
 test('strict clients discover S256 with public Cognito endpoints under a matching metadata issuer', async () => {
   const publicMetadata = {
     ...metadata,
-    authorization_endpoint: 'https://example.auth.eu-west-1.amazoncognito.com/oauth2/authorize',
-    token_endpoint: 'https://example.auth.eu-west-1.amazoncognito.com/oauth2/token',
+    authorization_endpoint: 'https://configured.auth.eu-west-1.amazoncognito.com/oauth2/authorize',
+    token_endpoint: 'https://configured.auth.eu-west-1.amazoncognito.com/oauth2/token',
   };
   const publicConfig = { ...cfg, authorizationServerMetadata: publicMetadata };
   const resourceResponse = await handleHttpEvent(event('/.well-known/oauth-protected-resource/mcp'), publicConfig);

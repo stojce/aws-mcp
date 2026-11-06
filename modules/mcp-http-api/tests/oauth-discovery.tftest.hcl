@@ -102,14 +102,14 @@ run "explicit_legacy_compatibility" {
   }
 }
 
-run "local_oauth_proxy_is_discoverable_and_keeps_cognito_verification" {
+run "public_oauth_endpoints_are_environment_configured_and_keep_cognito_verification" {
   command = apply
 
   variables {
-    allowed_origins = ["http://localhost:6274"]
+    allowed_origins = ["https://client.example.com"]
     oauth_proxy_endpoints = {
-      authorization_endpoint = "http://localhost:8080/authorize"
-      token_endpoint         = "http://localhost:8080/token"
+      authorization_endpoint = "https://example.auth.eu-west-1.amazoncognito.com/oauth2/authorize"
+      token_endpoint         = "https://example.auth.eu-west-1.amazoncognito.com/oauth2/token"
     }
   }
 
@@ -120,8 +120,8 @@ run "local_oauth_proxy_is_discoverable_and_keeps_cognito_verification" {
       aws_lambda_function.mcp.environment[0].variables.MCP_AUTHORIZATION_SERVER == output.oauth_authorization_server_issuer &&
       jsondecode(aws_lambda_function.mcp.environment[0].variables.MCP_AUTHORIZATION_SERVER_METADATA) == {
         issuer                                = output.oauth_authorization_server_issuer
-        authorization_endpoint                = "http://localhost:8080/authorize"
-        token_endpoint                        = "http://localhost:8080/token"
+        authorization_endpoint                = "https://example.auth.eu-west-1.amazoncognito.com/oauth2/authorize"
+        token_endpoint                        = "https://example.auth.eu-west-1.amazoncognito.com/oauth2/token"
         response_types_supported              = ["code"]
         grant_types_supported                 = ["authorization_code", "refresh_token"]
         token_endpoint_auth_methods_supported = ["none"]
@@ -130,7 +130,7 @@ run "local_oauth_proxy_is_discoverable_and_keeps_cognito_verification" {
         scopes_supported                      = ["openid", "email", output.required_scope]
       }
     )
-    error_message = "Clients must discover the local OAuth endpoints and public PKCE client capabilities under a matching HTTPS metadata issuer."
+    error_message = "The Lambda environment must supply public Cognito endpoints and PKCE capabilities under a matching HTTPS metadata issuer."
   }
 
   assert {
@@ -148,7 +148,29 @@ run "local_oauth_proxy_is_discoverable_and_keeps_cognito_verification" {
   }
 }
 
-run "non_loopback_http_proxy_is_rejected" {
+run "localhost_oauth_endpoints_are_rejected" {
+  command = plan
+  variables {
+    oauth_proxy_endpoints = {
+      authorization_endpoint = "http://localhost:8080/authorize"
+      token_endpoint         = "http://localhost:8080/token"
+    }
+  }
+  expect_failures = [var.oauth_proxy_endpoints]
+}
+
+run "https_loopback_oauth_endpoints_are_rejected" {
+  command = plan
+  variables {
+    oauth_proxy_endpoints = {
+      authorization_endpoint = "https://localhost:8080/authorize"
+      token_endpoint         = "https://127.0.0.1:8080/token"
+    }
+  }
+  expect_failures = [var.oauth_proxy_endpoints]
+}
+
+run "http_proxy_is_rejected" {
   command = plan
   variables {
     oauth_proxy_endpoints = {

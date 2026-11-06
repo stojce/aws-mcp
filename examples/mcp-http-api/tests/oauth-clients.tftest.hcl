@@ -37,6 +37,9 @@ run "hosted_clients_use_public_cognito_endpoints_and_s256_discovery" {
       contains(output.callback_urls, "https://claude.ai/api/mcp/auth_callback") &&
       contains(output.callback_urls, "https://mcptest.io/oauth/callback") &&
       contains(var.allowed_origins, "https://mcptest.io") &&
+      alltrue([for callback in output.callback_urls : startswith(callback, "https://")]) &&
+      alltrue([for origin in var.allowed_origins : startswith(origin, "https://")]) &&
+      !var.enable_password_auth_for_tests &&
       output.authorization_endpoint == output.cognito_authorization_endpoint &&
       output.token_endpoint == output.cognito_token_endpoint &&
       startswith(output.token_endpoint, "https://") &&
@@ -48,23 +51,23 @@ run "hosted_clients_use_public_cognito_endpoints_and_s256_discovery" {
   }
 }
 
-run "local_proxy_remains_opt_in_with_separate_cognito_upstreams" {
+run "public_oauth_override_keeps_separate_cognito_upstreams" {
   command = apply
   variables {
     oauth_proxy_endpoints = {
-      authorization_endpoint = "http://localhost:8080/authorize"
-      token_endpoint         = "http://localhost:8080/token"
+      authorization_endpoint = "https://auth.example.com/authorize"
+      token_endpoint         = "https://auth.example.com/token"
     }
   }
   assert {
     condition = (
-      output.authorization_endpoint == "http://localhost:8080/authorize" &&
-      output.token_endpoint == "http://localhost:8080/token" &&
+      output.authorization_endpoint == "https://auth.example.com/authorize" &&
+      output.token_endpoint == "https://auth.example.com/token" &&
       startswith(output.cognito_authorization_endpoint, "https://") &&
       startswith(output.cognito_token_endpoint, "https://") &&
       output.oauth_authorization_server_issuer == "https://mcp.example.cloudfront.net" &&
       output.authorization_server_metadata_url == "https://mcp.example.cloudfront.net/.well-known/oauth-authorization-server"
     )
-    error_message = "The local option must advertise the requested helper endpoints without using them as its Cognito upstreams."
+    error_message = "An HTTPS OAuth override must advertise its public endpoints while retaining the Cognito upstream outputs."
   }
 }

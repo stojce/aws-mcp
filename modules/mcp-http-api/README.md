@@ -140,8 +140,8 @@ separate endpoint allows a gradual transition.
 The example Cognito pool's public discovery document was checked on 2026-11-04
 and omitted `code_challenge_methods_supported`. Strict MCP OAuth clients must
 refuse that discovery response even though Cognito supports S256 authorization.
-Use a compliant external server for those clients, or the optional local OAuth
-proxy described below for sandbox testing. The
+Use the configured public Cognito discovery described below, or a compliant
+external server. The
 [protocol research](../../.scratch/mcp-on-aws/mcp-http-api-2026-07-28-protocol-research.md)
 records the source requirements and provider observation.
 
@@ -150,13 +150,12 @@ records the source requirements and provider observation.
 In Cognito mode, `oauth_proxy_endpoints` publishes RFC 8414 metadata for Cognito
 endpoints or an existing OAuth proxy. The example enables it for its public
 Cognito endpoints by default, so strict clients discover S256 support even
-though Cognito's own discovery document omits that field. The example's optional
-local helper supports these endpoints:
+though Cognito's own discovery document omits that field. For example:
 
 ```hcl
 oauth_proxy_endpoints = {
-  authorization_endpoint = "http://localhost:8080/authorize"
-  token_endpoint         = "http://localhost:8080/token"
+  authorization_endpoint = "https://example.auth.eu-west-1.amazoncognito.com/oauth2/authorize"
+  token_endpoint         = "https://example.auth.eu-west-1.amazoncognito.com/oauth2/token"
 }
 ```
 
@@ -170,11 +169,17 @@ endpoint or OIDC discovery document is published. Metadata explicitly declares
 `client_id_metadata_document_supported: false`; clients use the pre-registered
 `mcp_app_client_id` with an empty secret.
 
-This option publishes metadata; when using a proxy, deploy or run it separately. It must use
-the configured Cognito client, enforce its registered callbacks, and preserve
-PKCE and the MCP resource in code and refresh exchanges. HTTP URLs are limited to
-loopback hosts for local testing, and the token endpoint must be reachable from
-the MCP client. API Gateway continues to verify the Cognito
+Terraform passes this document to the Lambda in
+`MCP_AUTHORIZATION_SERVER_METADATA`; `index.mjs` reads that environment variable
+and the runtime serves it at the well-known endpoint. There is no hardcoded
+localhost fallback. Authorization and token endpoints must use HTTPS and cannot
+use loopback hosts. The local HTTP servers in `*.test.mjs` are isolated fixtures
+and are not packaged in the deployed Lambda.
+
+This option publishes metadata. If you configure a separate proxy, deploy it at
+a public HTTPS URL. It must use the configured Cognito client, enforce its
+registered callbacks, and preserve PKCE and the MCP resource in code and refresh
+exchanges. API Gateway continues to verify the Cognito
 `authorization_server_issuer`, resource audience, and scope; the backend receives
 the verified Cognito subject. Tokens are not reissued under the metadata issuer.
 

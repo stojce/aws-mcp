@@ -158,8 +158,4 @@ resource "aws_bedrockagentcore_gateway" "this" {
       pass_request_headers = true
     }
   }
-
-  tags = {
-    Name = local.gateway_name
-  }
 }

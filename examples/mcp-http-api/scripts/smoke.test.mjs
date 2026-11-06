@@ -56,15 +56,18 @@ async function fixture(t, { allowOrigin = true, looseSchema = false, sessionHead
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   t.after(() => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }));
-  const base = `http://127.0.0.1:${server.address().port}`;
-  const url = `${base}/mcp`;
+  // Ephemeral HTTP fixture for these tests; deployment URLs come from Lambda's
+  // MCP_AUTHORIZATION_SERVER_METADATA environment variable.
+  const fixtureOrigin = `http://127.0.0.1:${server.address().port}`;
+  const url = `${fixtureOrigin}/mcp`;
   const scope = `${url}/read`;
   cfg = {
     clientId: 'fixture-client', requiredScope: scope, resourceUrl: url,
-    resourceMetadataUrl: `${base}/.well-known/oauth-protected-resource/mcp`,
-    authorizationServer: oidc ? `${base}/issuer` : base,
+    resourceMetadataUrl: `${fixtureOrigin}/.well-known/oauth-protected-resource/mcp`,
+    authorizationServer: oidc ? `${fixtureOrigin}/issuer` : fixtureOrigin,
     authorizationServerMetadata: {
-      issuer: oidc ? `${base}/issuer` : base, authorization_endpoint: `${base}/authorize`, token_endpoint: `${base}/token`,
+      issuer: oidc ? `${fixtureOrigin}/issuer` : fixtureOrigin,
+      authorization_endpoint: `${fixtureOrigin}/authorize`, token_endpoint: `${fixtureOrigin}/token`,
       code_challenge_methods_supported: ['S256'], grant_types_supported: ['authorization_code', 'refresh_token'],
       client_id_metadata_document_supported: false,
     },

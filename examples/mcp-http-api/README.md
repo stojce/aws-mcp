@@ -19,24 +19,24 @@ the plan before applying the extraction.
 
 ## Deploy
 
-The defaults register the local login page at `http://localhost:8080/callback`
-and MCP Inspector's callbacks at `http://localhost:6274/oauth/callback` and
-`http://localhost:6274/oauth/callback/debug`, including the Inspector variants
-using `127.0.0.1`. Inspector's two loopback origins are also allowed by CORS.
-Claude hosted connectors use the registered callback
-`https://claude.ai/api/mcp/auth_callback`.
-mcptest.io uses `https://mcptest.io/oauth/callback`, and its browser origin
+The deployed server uses Cognito managed login and its public token endpoint.
+No local login page or token proxy needs to run. The default callback and CORS
+lists contain hosted clients only. Claude hosted connectors use
+`https://claude.ai/api/mcp/auth_callback`. mcptest.io uses
+`https://mcptest.io/oauth/callback`, and its browser origin
 `https://mcptest.io` is allowed by default. An override of `allowed_origins`
 replaces the defaults; include every browser origin you intend to support.
 For another client, configure its exact callback and browser origin:
 
 ```hcl
-callback_urls   = ["http://localhost:8080/callback"]
-allowed_origins = ["http://localhost:8080"]
+callback_urls   = ["https://agent.example.com/callback"]
+allowed_origins = ["https://agent.example.com"]
 ```
 
-Native clients omit Origin and need no allowlist entry. Override the example's
-loopback defaults for any non-sandbox deployment.
+Native clients omit Origin and need no allowlist entry. Register the exact
+ChatGPT callback shown for your connection; adding a different shared callback
+does not change ChatGPT's selected redirect URI. Password API authentication is
+disabled by default; the test-only flag can enable it in a sandbox.
 
 ```bash
 cd examples/mcp-http-api
@@ -51,7 +51,7 @@ Passwords are supplied through environment variables and never enter Terraform
 state. Outputs include `mcp_url`, `mcp_app_client_id`, `required_scope`,
 `authorization_endpoint`, `token_endpoint`, `resource_metadata_url`, and `user_subs`.
 
-## Login page and MCP Inspector
+## Hosted OAuth and MCP clients
 
 By default, the MCP endpoint publishes authorization-server metadata at
 `/.well-known/oauth-authorization-server`, advertising `code_challenge_methods_supported:
@@ -59,6 +59,20 @@ By default, the MCP endpoint publishes authorization-server metadata at
 metadata points to this document's issuer at the MCP origin. Cognito supports
 S256 but omits it from its own discovery document, which strict clients reject.
 The native JWT authorizer still verifies tokens against the Cognito issuer.
+
+Leave `oauth_proxy_endpoints = null`, the default. Terraform builds both public
+URLs from the deployed Cognito domain and writes the discovery document to the
+Lambda environment variable `MCP_AUTHORIZATION_SERVER_METADATA`. The Lambda
+reads this configuration at startup. Its archive contains the MCP runtime and
+tool manifest; local login tooling and test HTTP servers are not included.
+Endpoint overrides must use public HTTPS URLs. Terraform rejects HTTP and
+loopback endpoint overrides, including HTTPS localhost addresses.
+
+The legacy `local-oauth.tfvars.example` now sets `oauth_proxy_endpoints = null`.
+Update any existing copy of `local-oauth.tfvars` to the same value before using
+it again. Remove old localhost endpoint overrides in the MCP client and refresh
+its cached discovery after deploying. The `authorization_endpoint` and
+`token_endpoint` Terraform outputs show the URLs advertised to clients.
 
 This supports hosted clients such as **Claude Settings → Connectors**. In Claude, choose **Use
 your own OAuth client**, supply `mcp_app_client_id`, and leave the secret empty.
@@ -85,7 +99,7 @@ does not infer host compatibility from mcptest's successful connection.
 | Client | Callback configuration | Verification for these changes |
 | --- | --- | --- |
 | mcptest 1.0.0 | `https://mcptest.io/oauth/callback`; origin `https://mcptest.io` | Local CORS/protocol regressions pass; a fresh direct-browser login and refresh await deployment |
-| MCP Inspector | The four registered localhost/127.0.0.1 callbacks on port 6274 | Local login and token-proxy tests pass; actual Inspector workflow needs a fresh live check |
+| MCP Inspector | Explicitly register its exact callbacks and browser origin for local testing | Use the public Cognito endpoints; actual Inspector login needs a fresh live check |
 | Claude hosted connector | `https://claude.ai/api/mcp/auth_callback` is in the defaults | Connector login and refresh have not been verified for these changes |
 | ChatGPT | Register the exact callback displayed for this connector | Connector configuration and live verification are still needed |
 | Cursor | Register the installed version's exact callback; use a fixed port when available | Client configuration and live verification are still needed |
@@ -97,69 +111,20 @@ elicitation are not used by this tool-only server. Discovery advertises tools
 with `listChanged: false`; unimplemented methods return method-not-found.
 Their absence is optional functionality, not a failed authorization flow.
 
-For a client that runs on your machine and needs to discover the local helper,
-the optional `local-oauth.tfvars.example` contains:
+### MCP Inspector
 
-```hcl
-oauth_proxy_endpoints = {
-  authorization_endpoint = "http://localhost:8080/authorize"
-  token_endpoint         = "http://localhost:8080/token"
-}
-```
+Register Inspector's exact callback URLs in `callback_urls` and its browser
+origin in `allowed_origins` when testing from your machine. These client-side
+callbacks are separate from the deployed authorization and token endpoints.
 
-Apply this option with `terraform plan -var-file=local-oauth.tfvars.example`, inspect the
-plan, then `terraform apply -var-file=local-oauth.tfvars.example`. Clients discover these URLs through the MCP endpoint's
-protected-resource metadata and `/.well-known/oauth-authorization-server`.
-Per-client URL overrides are optional. Supply `mcp_app_client_id` as the public
-client ID and register the client's exact callback in `callback_urls`; browser
-clients also need their origin in `allowed_origins`. Dynamic client registration
-is still unsupported.
-
-The helper must run on the same machine as the client exchanging tokens:
-`localhost` refers to that machine. Claude hosted connectors cannot use this
-option. Apply with `oauth_proxy_endpoints = null` (the default) to restore the public
-Cognito endpoints in the module's S256 metadata. The `authorization_endpoint` and `token_endpoint`
-outputs match the advertised URLs; the helper uses the separate
-`cognito_authorization_endpoint` and `cognito_token_endpoint` outputs to reach
-Cognito.
-
-After deploying the updated discovery, callback, and CORS configuration, start the local
-page with Node.js 22 from this example directory:
-
-```bash
-node login/server.mjs
-```
-
-Open **http://localhost:8080**. **Continue to Cognito** starts a resource-bound
-authorization-code login with S256 PKCE. Cognito collects the email and password,
-then returns to this page's `/callback`. The page checks the single-use state
-before exchanging the code. It keeps tokens in memory, supports refresh-token
-rotation, and lets you copy the access token for Inspector's bearer token field.
-Reloading or **Clear token** clears the page's tokens; it does not sign out the
-Cognito browser session or revoke a token already copied to another client.
-
-For Inspector to own the OAuth flow, leave the login server running, download
-the public configuration from **http://localhost:8080/inspector-config.json**,
-then launch Inspector with the downloaded file:
-
-```bash
-npx @modelcontextprotocol/inspector --config /path/to/bookings-mcp-inspector.json --server bookings-mcp
-```
-
-The generated configuration targets the real `mcp_url` using Streamable HTTP.
-It preconfigures the public client ID and `openid email <required_scope>`.
-The generated file also sets the local authorization and token URL overrides for
-compatibility with deployments from before proxy discovery. The client secret
-is empty. Cognito does not need
-the `offline_access` scope, so **Request refresh token** is disabled in Inspector;
-Cognito still returns a refresh token for the code grant.
-
-If Inspector is already running, open **Server Settings → OAuth Settings** for
-`bookings-mcp`, copy the client ID and scopes from the local page, disable
-**Request refresh token**, then save. Clear cached OAuth discovery after applying
-either endpoint configuration. To use the local helper instead of the default public endpoints, copy both local URL
-overrides as well if you want Inspector to use the helper. Starting a second Inspector
-on the same port will fail.
+In **Server Settings → OAuth Settings**, use `mcp_app_client_id`, an empty client
+secret, and `openid email <required_scope>`. Clear any localhost authorization
+or token URL override. Use discovery or copy the public `authorization_endpoint`
+and `token_endpoint` Terraform outputs. Disable **Request refresh token**:
+Cognito returns a refresh token for the code grant without the `offline_access`
+scope. The client must send S256 PKCE and `resource=mcp_url` during authorization
+and token exchange. A client that omits the resource parameter will not obtain
+the resource-bound token this deployment requires.
 
 ### Inspector reports unsupported dynamic client registration
 
@@ -170,9 +135,9 @@ Inspector's **Client ID** field, with an empty client secret.
 
 If Inspector logs `Stripping Inspector-extension keys` with
 `smuggledKeys: [ 'oauth' ]`, its `/api/servers` request discarded the OAuth
-configuration, including that client ID. The downloaded `mcpServers` document is
-a complete configuration file for `--config`. Pasting its server entry into a
-per-server transport configuration editor can discard the `oauth` block. Set the
+configuration, including that client ID. A `mcpServers` document is a complete
+configuration file for `--config`; pasting its server entry into a per-server
+transport configuration editor can discard the `oauth` block. Set the
 OAuth fields through **Server Settings → OAuth Settings**, save, and reconnect.
 
 For integrations using Inspector's server API, send transport fields in `config`
@@ -181,35 +146,17 @@ and OAuth fields in the separate top-level `settings` object:
 `oauthRequestRefreshToken: false`. Preserve the other settings required by that
 API, including headers, metadata, and timeouts. Nested `config.oauth` is stripped.
 
-Connect and authenticate in Inspector. It redirects to this login page, then
-**Continue to Cognito** sends its original callback, state, and PKCE challenge to
-Cognito. Cognito redirects directly to Inspector. The local token endpoint
-forwards code and refresh exchanges to Cognito with `resource=mcp_url`.
-The MCP endpoint still verifies Cognito tokens through its native JWT authorizer.
-When the local option is enabled, public OAuth metadata advertises the helper
-under the MCP origin as its issuer. Cognito still issues and signs the tokens;
-its own discovery document is unchanged. The helper uses Cognito's issuer for
-standalone OIDC nonce checks.
-
-Use `localhost` for the page. To change its port, set `MCP_LOGIN_PORT`, register
-`http://localhost:<port>/callback` in `callback_urls`, update both
-`oauth_proxy_endpoints` URLs, and apply Terraform again.
-If you change Inspector's origin or port, register its exact `/oauth/callback`
-and `/oauth/callback/debug` URLs too. Restart the login server after applying
-configuration changes; it reads the public Terraform outputs at startup.
-
 ### Unsloth callback ports
 
 [Unsloth's MCP client](https://github.com/unslothai/unsloth/blob/main/studio/backend/core/inference/mcp_client.py)
 uses FastMCP OAuth with a pre-registered client ID but leaves `callback_port`
 unset. FastMCP chooses a random `http://localhost:<port>/callback` on each new
 OAuth client instance. Cognito requires an exact registered callback and does
-not accept a wildcard port, so publishing the local endpoint URLs alone does
-not make this callback compatible. Unsloth needs a fixed callback port registered
+not accept a wildcard port. Unsloth needs a fixed callback port registered
 in `callback_urls`, or an OAuth broker that supports dynamic loopback callbacks.
-The current helper enforces the explicit callback allowlist. As a manual testing
-option, use the standalone helper's access token in an Authorization header if
-the client supports fixed headers; renew it when it expires.
+For manual token inspection, the [optional local test page](login/README.md)
+can obtain an access token for a client that supports bearer-token headers.
+It has no role in serving production discovery or authenticating hosted clients.
 
 ### Create a test user
 
@@ -230,11 +177,6 @@ or supply a password, set `TEST_USER_EMAIL` and optionally `TEST_USER_PASSWORD`.
 The script refuses to reset a confirmed existing user. This extra test user is
 created outside Terraform and has no seeded bookings; `get_my_bookings` returns
 an empty list. Use Alice or Bob to test the seeded booking ownership checks.
-
-The page uses the Achromatic ledger style (seed `2011435650`), with a blue grey
-ground, Geist, and the real deployment's connection settings. Its main action
-answers how to sign in for an MCP test. The bundled Geist font uses the
-[SIL Open Font License](login/geist.LICENSE.txt). The page needs no sample data.
 
 ## Positive login and smoke test
 
@@ -387,7 +329,7 @@ compatibility results.
 
 ## Notes
 
-- `enable_password_auth_for_tests` defaults to `true` only in this sandbox example.
+- `enable_password_auth_for_tests` defaults to `false`; enable it only for explicit sandbox tests.
   It does not mint resource-bound MCP tokens; the standard password flow is useful
   for negative authentication tests. Keep it `false` outside sandboxes.
 - The module's `allow_unbound_access_tokens` legacy option defaults to `false`.
