@@ -7,6 +7,10 @@ locals {
     "tools.json"                   = local.tools_manifest
     "index.mjs"                    = file("${path.module}/lambda/mcp-server/index.mjs")
     "runtime.mjs"                  = file("${path.module}/lambda/mcp-server/runtime.mjs")
+    "authorization.mjs"            = file("${path.module}/lambda/mcp-server/authorization.mjs")
+    "protocol.mjs"                 = file("${path.module}/lambda/mcp-server/protocol.mjs")
+    "http.mjs"                     = file("${path.module}/lambda/mcp-server/http.mjs")
+    "tools.mjs"                    = file("${path.module}/lambda/mcp-server/tools.mjs")
     "schema-validator.mjs"         = file("${path.module}/lambda/mcp-server/schema-validator.mjs")
     "schema-validator.LICENSE.txt" = file("${path.module}/lambda/mcp-server/schema-validator.LICENSE.txt")
   }

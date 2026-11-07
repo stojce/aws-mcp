@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { format } from 'node:util';
 import { authorize, handleMessage, handleHttpEvent, initializeTools } from './runtime.mjs';
 
 const CLIENT_ID = 'mcp-client-123';
@@ -420,6 +421,36 @@ test('HTTP: missing authorizer claims yields 401 with WWW-Authenticate', async (
   assert.match(res.headers['www-authenticate'], /invalid_token/);
   assert.ok(res.headers['www-authenticate'].includes(`resource_metadata="${METADATA_URL}"`));
   assert.match(res.headers['www-authenticate'], /scope="mcp\/read"/);
+});
+
+test('HTTP: request handling does not log bearer tokens, private claims, or tool arguments', async t => {
+  const logs = [];
+  for (const method of ['log', 'info', 'warn', 'error', 'debug']) {
+    t.mock.method(console, method, (...args) => logs.push(format(...args)));
+  }
+  const token = 'test-private-bearer-token';
+  const email = 'private-user@example.invalid';
+  const since = 'private-tool-argument';
+  const config = {
+    ...cfg,
+    serverInfo: { name: 'private-config-marker', version: '0' },
+    invokeTool: async () => ({ bookings: [] }),
+  };
+  for (const [claims, expectedStatus] of [
+    [{ ...goodClaims, email }, 200],
+    [{ ...goodClaims, email, client_id: 'wrong-client' }, 401],
+  ]) {
+    const event = httpEvent(claims, {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'get_my_bookings', arguments: { since } },
+    });
+    event.headers.authorization = `Bearer ${token}`;
+    assert.equal((await handleHttpEvent(event, config)).statusCode, expectedStatus);
+  }
+  const output = logs.join('\n');
+  for (const privateValue of [token, email, since, config.serverInfo.name]) {
+    assert.equal(output.includes(privateValue), false, 'Logs must not contain raw request or configuration data');
+  }
 });
 
 test('HTTP: public metadata identifies the canonical resource and Cognito issuer without a token', async () => {

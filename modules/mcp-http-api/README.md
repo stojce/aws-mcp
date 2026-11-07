@@ -494,11 +494,29 @@ terraform -chdir=modules/mcp-http-api test -filter=tests/resource-server.tftest.
 
 ## Lambda packages
 
+The Lambda source lives in `lambda/mcp-server/`:
+
+| File | Responsibility |
+| --- | --- |
+| `index.mjs` | Load deployment configuration and invoke the backend with the reusable AWS SDK client. |
+| `runtime.mjs` | Coordinate HTTP requests and dispatch MCP methods. Keep the public runtime exports used by direct callers and tests. |
+| `authorization.mjs` | Check verified claims, client identity, resource audience, token purpose, and scopes. |
+| `protocol.mjs` | Define protocol versions and JSON-RPC envelopes; validate messages and client metadata. |
+| `http.mjs` | Validate mirrored request headers, browser origins, and CORS preflight. |
+| `tools.mjs` | Compile tool schemas, collect header annotations, validate arguments, and enforce backend deadlines. |
+| `schema-validator.mjs` | Generated validator bundle; rebuild using the instructions above. |
+
+Only `index.mjs` imports the AWS SDK. Direct callers provide `invokeTool` and
+configuration to `handleHttpEvent` or `handleMessage`; tests exercise those same
+exports. HTTP authorization uses only API Gateway's verified authorizer context.
+Tool invocations receive that identity separately from client arguments.
+
 Each instance writes its generated ZIP under
 `${path.root}/.terraform/mcp-http-api/<name>-<source-hash>.zip`. The hash covers
-`tools.json`, `index.mjs`, `runtime.mjs`, the validator bundle, and its license
-notices, so different instances and changed manifests or code keep separate
-artifacts. The module source directory is only read during packaging.
+`tools.json`, all runtime modules listed above, and the validator license notices,
+so different instances and changed manifests or code keep separate artifacts.
+The module source directory is only read during packaging. When adding a runtime
+file, include it in `local.mcp_server_sources` and the packaging test's `codeFiles`.
 
 Keep the generated ZIPs until their saved plans have been applied. When planning
 and applying in separate workspaces, transfer the referenced ZIPs with the plan

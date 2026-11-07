@@ -11,7 +11,10 @@ import { promisify } from 'node:util';
 const execute = promisify(execFile);
 const moduleDirectory = fileURLToPath(new URL('../', import.meta.url));
 const instances = ['first', 'second'];
-const codeFiles = ['index.mjs', 'runtime.mjs', 'schema-validator.mjs', 'schema-validator.LICENSE.txt'];
+const codeFiles = [
+  'index.mjs', 'runtime.mjs', 'authorization.mjs', 'protocol.mjs', 'http.mjs', 'tools.mjs',
+  'schema-validator.mjs', 'schema-validator.LICENSE.txt',
+];
 const inputSchema = {
   type: 'object',
   properties: { count: { type: 'integer', minimum: 1, 'x-mcp-header': 'Count' } },

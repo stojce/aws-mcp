@@ -1,18 +1,30 @@
 import { readFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { handleHttpEvent, initializeTools } from './runtime.mjs';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
 const { tools, serverName, serverVersion } = JSON.parse(
-  await readFile(path.join(here, 'tools.json'), 'utf8')
+  await readFile(new URL('./tools.json', import.meta.url), 'utf8')
 );
 
 initializeTools(tools);
 
 const lambda = new LambdaClient({});
-const cfg = {
+
+async function invokeTool({ tool, arguments: args, identity }, { abortSignal }) {
+  // Identity comes only from the verified token. Client arguments cannot set it.
+  const response = await lambda.send(
+    new InvokeCommand({
+      FunctionName: process.env.TOOL_BACKEND_ARN,
+      InvocationType: 'RequestResponse',
+      Payload: Buffer.from(JSON.stringify({ tool, arguments: args, identity })),
+    }),
+    { abortSignal }
+  );
+  if (response.FunctionError) throw new Error(`backend error: ${response.FunctionError}`);
+  return JSON.parse(Buffer.from(response.Payload).toString('utf8'));
+}
+
+const config = {
   clientId: process.env.MCP_CLIENT_ID,
   requiredScope: process.env.MCP_REQUIRED_SCOPE,
   resourceUrl: process.env.MCP_RESOURCE_URL,
@@ -27,19 +39,7 @@ const cfg = {
   toolTimeoutMs: Number(process.env.MCP_TOOL_TIMEOUT_MS ?? 27000),
   serverInfo: { name: serverName, version: serverVersion },
   tools,
-  invokeTool: async ({ tool, arguments: args, identity }, { abortSignal }) => {
-    // Identity comes ONLY from the verified token. Client arguments cannot set it.
-    const res = await lambda.send(
-      new InvokeCommand({
-        FunctionName: process.env.TOOL_BACKEND_ARN,
-        InvocationType: 'RequestResponse',
-        Payload: Buffer.from(JSON.stringify({ tool, arguments: args, identity })),
-      }),
-      { abortSignal }
-    );
-    if (res.FunctionError) throw new Error(`backend error: ${res.FunctionError}`);
-    return JSON.parse(Buffer.from(res.Payload).toString('utf8'));
-  },
+  invokeTool,
 };
 
-export const handler = async event => handleHttpEvent(event, cfg);
+export const handler = async event => handleHttpEvent(event, config);
