@@ -16,12 +16,14 @@ variable "enable_password_auth_for_tests" {
 }
 
 variable "callback_urls" {
-  description = "Pre-registered authorization-code callbacks for hosted MCP clients. Register the exact callback displayed by each client. Local development callbacks require an explicit override."
+  description = "Pre-registered authorization-code callbacks for hosted MCP clients and local Unsloth using fixed port 6275. Register the exact callback displayed by each client."
   type        = list(string)
   default = [
     "https://claude.ai/api/mcp/auth_callback",
     "https://mcptest.io/oauth/callback",
     "https://chatgpt.com/connector_platform_oauth_redirect",
+    "http://localhost:53416/callback",
+    "http://localhost:6275/callback",
   ]
 }
 

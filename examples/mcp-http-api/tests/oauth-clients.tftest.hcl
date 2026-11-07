@@ -30,14 +30,15 @@ mock_provider "aws" {
 
 mock_provider "archive" {}
 
-run "hosted_clients_use_public_cognito_endpoints_and_s256_discovery" {
+run "hosted_and_unsloth_clients_use_public_cognito_endpoints_and_s256_discovery" {
   command = apply
   assert {
     condition = (
       contains(output.callback_urls, "https://claude.ai/api/mcp/auth_callback") &&
       contains(output.callback_urls, "https://mcptest.io/oauth/callback") &&
+      contains(output.callback_urls, "http://localhost:6275/callback") &&
       contains(var.allowed_origins, "https://mcptest.io") &&
-      alltrue([for callback in output.callback_urls : startswith(callback, "https://")]) &&
+      alltrue([for callback in output.callback_urls : startswith(callback, "https://") || can(regex("^http://localhost:[0-9]+/callback$", callback))]) &&
       alltrue([for origin in var.allowed_origins : startswith(origin, "https://")]) &&
       !var.enable_password_auth_for_tests &&
       output.authorization_endpoint == output.cognito_authorization_endpoint &&
@@ -47,7 +48,7 @@ run "hosted_clients_use_public_cognito_endpoints_and_s256_discovery" {
       output.authorization_server_metadata_url == "https://mcp.example.cloudfront.net/.well-known/oauth-authorization-server" &&
       output.authorization_server_issuer == "https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_example"
     )
-    error_message = "Hosted clients need registered callbacks, direct browser access for mcptest, and public S256 discovery while token verification trusts Cognito."
+    error_message = "Hosted clients and Unsloth need registered callbacks, including Unsloth's fixed localhost:6275 port, with public S256 discovery while token verification trusts Cognito."
   }
 }
 

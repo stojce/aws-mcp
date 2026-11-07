@@ -5,6 +5,8 @@ API Gateway HTTP API JWT authorizer** and a small MCP server Lambda. Supports
 MCP `2026-07-28` and legacy `2025-06-18`, with Cognito or an existing
 external OAuth/OIDC authorization server.
 
+The MCP server Lambda runs on Node.js 26 (`nodejs26.x`).
+
 ## What it creates
 
 | Resource | Purpose |
@@ -19,10 +21,8 @@ configuration composes both modules and passes the Cognito module's
 `authorization_server` output to `cognito_authorization_server`. External mode
 uses an existing authorization server and registered MCP client.
 
-Requires Terraform 1.9+ and `hashicorp/aws >= 6.0.0, < 7.0.0`. The supporting
-example requires AWS provider 6.13.0+ for managed-login branding. AWS provider v5
-is unsupported: the Cognito issuer uses the `aws_region.region` attribute
-introduced in v6.
+Requires Terraform 1.9+ and `hashicorp/aws >= 6.69.1, < 7.0.0` for the Node.js 26
+Lambda runtime.
 
 ## Request path
 
@@ -504,7 +504,7 @@ Keep the generated ZIPs until their saved plans have been applied. When planning
 and applying in separate workspaces, transfer the referenced ZIPs with the plan
 and preserve their relative paths.
 
-The packaging regression test requires Terraform 1.9+, Node.js 22+, and `unzip`.
+The packaging regression test requires Terraform 1.9+, Node.js 26, and `unzip`.
 It reuses providers installed in this module (or `MCP_TERRAFORM_PLUGIN_DIR`),
 otherwise installs them normally. Run it from the repository root:
 

@@ -5,8 +5,8 @@ Cognito pool and domain, two test users, a DynamoDB bookings table, a tool backe
 Lambda, and the MCP
 endpoint. The default authentication policy requires resource-bound access tokens.
 
-Requires Terraform 1.9+ and AWS provider 6.13.0+ for the managed-login branding
-resource. The pool uses the Essentials feature plan and managed login version 2,
+Requires Terraform 1.9+ and AWS provider 6.69.1+ for the Node.js 26 MCP Lambda
+runtime. The pool uses the Essentials feature plan and managed login version 2,
 with a default branding style assigned to the MCP app client. Classic hosted UI
 version 1 does not issue the resource audience required by the strict MCP policy.
 The Cognito resource-server identifier is the canonical MCP URL, so the default
@@ -20,8 +20,9 @@ the plan before applying the extraction.
 ## Deploy
 
 The deployed server uses Cognito managed login and its public token endpoint.
-No local login page or token proxy needs to run. The default callback and CORS
-lists contain hosted clients only. Claude hosted connectors use
+No local login page or token proxy needs to run. The default callbacks include
+hosted clients and local Unsloth at `http://localhost:6275/callback`. Unsloth
+requires the fixed-port patch described below. Claude hosted connectors use
 `https://claude.ai/api/mcp/auth_callback`. mcptest.io uses
 `https://mcptest.io/oauth/callback`, and its browser origin
 `https://mcptest.io` is allowed by default. An override of `allowed_origins`
@@ -154,6 +155,20 @@ unset. FastMCP chooses a random `http://localhost:<port>/callback` on each new
 OAuth client instance. Cognito requires an exact registered callback and does
 not accept a wildcard port. Unsloth needs a fixed callback port registered
 in `callback_urls`, or an OAuth broker that supports dynamic loopback callbacks.
+
+For a local workaround, set FastMCP's `callback_port = 6275` in Unsloth's
+`_oauth` helper for this MCP app client. The example registers
+`http://localhost:6275/callback` by default. Unsloth's current server settings expose the
+client ID and secret but no callback-port option, so this requires a local code
+patch. Fully quit and reopen Unsloth after patching: a running backend keeps the
+old OAuth code and continues choosing random ports. An Unsloth update may overwrite the patch.
+Changing only Cognito's allowlist to one randomly selected port will fail again
+when Unsloth selects another port.
+
+If you override `callback_urls`, preserve `http://localhost:6275/callback`
+alongside every hosted callback you still use. Local Unsloth handles OAuth in
+its backend, so this callback does not require a browser CORS origin entry.
+
 For manual token inspection, the [optional local test page](login/README.md)
 can obtain an access token for a client that supports bearer-token headers.
 It has no role in serving production discovery or authenticating hosted clients.
@@ -271,7 +286,7 @@ the tested token flow, not another host's login or callback behavior.
 
 ## Local verification
 
-Run from the repository root with Node.js 22 and Terraform 1.9+:
+Run from the repository root with Node.js 26 and Terraform 1.9+:
 
 ```bash
 node --test modules/mcp-gateway/lambda/interceptor/index.test.js modules/mcp-http-api/lambda/mcp-server/*.test.mjs

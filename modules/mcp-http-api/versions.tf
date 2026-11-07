@@ -3,9 +3,9 @@ terraform {
 
   required_providers {
     aws = {
-      # The Cognito issuer uses aws_region.current.region, introduced in v6.
+      # Keep the provider new enough to recognize the Node.js 26 Lambda runtime.
       source  = "hashicorp/aws"
-      version = ">= 6, < 7"
+      version = ">= 6.69.1, < 7"
     }
     archive = {
       source  = "hashicorp/archive"

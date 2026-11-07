@@ -453,6 +453,10 @@ function allowedOrigin(origin, origins) {
 
 // HTTP adapter for API Gateway HTTP API payload format 2.0.
 export async function handleHttpEvent(event, cfg) {
+
+  console.log(event)
+  console.log(cfg)
+
   const method = event?.requestContext?.http?.method ?? event?.httpMethod;
   const headers = Object.entries(event?.headers ?? {});
   const originHeaders = headers.filter(([name]) => name.toLowerCase() === 'origin');

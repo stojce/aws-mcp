@@ -67,7 +67,7 @@ resource "aws_cloudwatch_log_group" "mcp" {
 resource "aws_lambda_function" "mcp" {
   function_name    = "${var.name}-mcp-server"
   role             = aws_iam_role.mcp.arn
-  runtime          = "nodejs22.x"
+  runtime          = "nodejs26.x"
   handler          = "index.handler"
   filename         = data.archive_file.mcp_server.output_path
   source_code_hash = data.archive_file.mcp_server.output_base64sha256

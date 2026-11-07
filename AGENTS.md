@@ -10,7 +10,7 @@ This repository provisions authenticated AWS MCP endpoints with Terraform and No
 
 ## Build, Test, and Development Commands
 
-Use Terraform 1.9+ and Node.js 22 to match the Lambda runtime.
+Use Terraform 1.9+ and Node.js 26 to match the MCP server Lambda runtime.
 
 - `terraform fmt -check -recursive`: check Terraform formatting from the repository root. Format changed files with `terraform fmt <file>`.
 - From an example directory, run `terraform init`, then `terraform validate` and `terraform plan` to initialize providers, validate configuration, and inspect infrastructure changes.
@@ -37,5 +37,9 @@ Name tests `*.test.js` or `*.test.mjs`. Cover identity validation, denial paths,
 History uses short subjects such as `docs` and `ticket 08: ADR written; map complete`. Use descriptive, scoped subjects and ticket references when applicable. PRs should explain behavior changes, link relevant issues or ADRs, and report unit-test and Terraform validation results. Include plan summaries for infrastructure changes.
 
 ## Security & Configuration Tips
+
+Run AWS CLI commands through `awscrdpe`, the user's alias for `aws-vault exec cr_dpe --no-session --`: for example, `awscrdpe aws s3 ls`. When the alias is unavailable in a noninteractive shell, load it with `zsh -ic 'awscrdpe aws s3 ls'` (substitute the intended AWS command).
+
+For Unsloth OAuth callback errors, consult `examples/mcp-http-api/README.md` under "Unsloth callback ports" before changing Cognito's callback allowlist. The example registers fixed port `6275`; preserve that callback in any variable override. After patching Unsloth's OAuth code, fully quit and reopen the app so its backend loads the change.
 
 Keep credentials, tokens, signing secrets, Terraform state, and saved plans out of commits. Supply test credentials through environment variables. Preserve verified per-user identity and deny-by-default authorization; keep password authentication disabled outside test sandboxes.
